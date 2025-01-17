@@ -1,11 +1,25 @@
 # Dataset for "Improving External Communication of Automated Vehicles Using Bayesian Optimization"
 
+## Authors
+ Mark Colley\*, Pascal Jansen\*, Mugda Keskar, Enrico Rukzio  
+(\*Joint First Authors)
+
 ## Dataset Overview
 This dataset accompanies the CHI '25 publication titled **"Improving External Communication of Automated Vehicles Using Bayesian Optimization"**. It includes data collected during a user study employing Multi-Objective Bayesian Optimization (MOBO) to optimize external Human-Machine Interface (eHMI) designs for automated vehicles (AVs).
 
 ## Citation
 If you use this dataset, please cite the associated publication:
-@inproceedings{colley2025eHMI, title={Improving External Communication of Automated Vehicles Using Bayesian Optimization}, author={Colley, Mark and Jansen, Pascal and Keskar, Mugdha and Rukzio, Enrico}, booktitle={CHI Conference on Human Factors in Computing Systems (CHI '25)}, year={2025}, publisher={ACM}, address={Yokohama, Japan}, doi={10.1145/3706598.3714187} }
+
+```
+@inproceedings{colley2025eHMI,
+title={Improving External Communication of Automated Vehicles Using Bayesian Optimization},
+author={Colley, Mark and Jansen, Pascal and Keskar, Mugdha and Rukzio, Enrico},
+booktitle={CHI Conference on Human Factors in Computing Systems (CHI '25)},
+year={2025},
+publisher={ACM},
+address={Yokohama, Japan},
+doi={10.1145/3706598.3714187}}
+```
 
 
 ## License
