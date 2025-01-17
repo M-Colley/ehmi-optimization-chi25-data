@@ -1,7 +1,7 @@
 # Dataset for "Improving External Communication of Automated Vehicles Using Bayesian Optimization"
 
 ## Authors
- Mark Colley\*, Pascal Jansen\*, Mugda Keskar, Enrico Rukzio  
+ [Mark Colley](https://scholar.google.de/citations?user=Kt5I7wYAAAAJ&hl=de&oi=ao)\*, [Pascal Jansen](https://scholar.google.de/citations?user=cR1_0-EAAAAJ&hl=en)\*, Mugda Keskar, [Enrico Rukzio](https://scholar.google.de/citations?user=LEu4D5gAAAAJ&hl=de&oi=ao)
 (\*Joint First Authors)
 
 ## Dataset Overview
