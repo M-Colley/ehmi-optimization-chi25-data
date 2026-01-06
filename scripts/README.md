@@ -21,10 +21,13 @@ questions using the eHMI study data:
 2. Trains a **Random Forest oracle** to map the 9 eHMI parameters to a target objective
    (composite or single-objective).
 3. Runs iterative BO with a **Gaussian Process** surrogate.
-4. Injects **sensor error** (Gaussian jitter) into the observed feedback after a chosen
+4. Trains one or more **oracle models** (Random Forest, Extra Trees, Gradient Boosting,
+   HistGradientBoosting) to map eHMI parameters to the target objective.
+5. Injects **sensor error** (Gaussian jitter) into the observed feedback after a chosen
    iteration.
-5. Writes a per-iteration CSV and a summary of the **parameter adjustment** from
+6. Writes a per-iteration CSV and a summary of the **parameter adjustment** from
    iteration *N* to *N+1* (e.g., 20 → 21).
+7. Displays a progress bar for each simulation run.
 
 ## Install (latest compatible versions)
 
@@ -42,6 +45,7 @@ python scripts/bo_sensor_error_simulation.py \
   --initial-samples 5 \
   --candidate-pool 1000 \
   --objective composite \
+  --oracle-models random_forest,extra_trees,gradient_boosting \
   --acq all \
   --seed 7 \
   --output-dir output/bo_sensor_error
@@ -51,6 +55,13 @@ By default, the script now sweeps jitter start points (`20,25,30`) and jitter
 magnitudes (`0.05,0.1,0.2,0.4`). Override these with
 `--jitter-iterations` and `--jitter-stds` or pass a single
 `--jitter-iteration`/`--jitter-std` pair for a focused run.
+
+Oracle models can be swept with `--oracle-models`, or set to a single model with
+`--oracle-model`. Use `--oracle-model all` to run all available options:
+
+```bash
+python scripts/bo_sensor_error_simulation.py --oracle-model all
+```
 
 ### Baseline (no-jitter) comparison
 
@@ -74,7 +85,8 @@ python scripts/bo_sensor_error_simulation.py --no-baseline-run
   - Full iteration log: parameter values, true objective, observed objective,
     `error_applied`, and `error_magnitude`.
 - `bo_sensor_error_<acq>_seed<seed>_baseline.csv`
-- `bo_sensor_error_<acq>_seed<seed>_jittered.csv`
+- `bo_sensor_error_<acq>_seed<seed>_baseline_<oracle_model>.csv`
+- `bo_sensor_error_<acq>_seed<seed>_jittered_<oracle_model>_<error_model>_jit<iter>_std<std>.csv`
 - `bo_sensor_error_summary.csv`
   - One row per acquisition function.
   - `delta_<param>`: change in each parameter from iteration *N* to *N+1*.
