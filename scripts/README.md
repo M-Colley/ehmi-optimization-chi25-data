@@ -22,6 +22,7 @@ questions using the eHMI study data:
    (composite or single-objective).
 3. Runs iterative BO with a **Gaussian Process** surrogate.
 4. Trains one or more **oracle models** (Random Forest, Extra Trees, Gradient Boosting,
+   HistGradientBoosting, XGBoost, LightGBM) to map eHMI parameters to the target objective.
    HistGradientBoosting) to map eHMI parameters to the target objective.
 5. Injects **sensor error** (Gaussian jitter) into the observed feedback after a chosen
    iteration.
@@ -45,6 +46,7 @@ python scripts/bo_sensor_error_simulation.py \
   --initial-samples 5 \
   --candidate-pool 1000 \
   --objective composite \
+  --oracle-models random_forest,extra_trees,gradient_boosting,xgboost,lightgbm \
   --oracle-models random_forest,extra_trees,gradient_boosting \
   --acq all \
   --seed 7 \

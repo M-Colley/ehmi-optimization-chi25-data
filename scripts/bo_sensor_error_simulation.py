@@ -27,6 +27,8 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.ensemble import HistGradientBoostingRegressor
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, WhiteKernel
 from tqdm import tqdm
@@ -114,6 +116,8 @@ ORACLE_MODEL_CHOICES = [
     "extra_trees",
     "gradient_boosting",
     "hist_gradient_boosting",
+    "xgboost",
+    "lightgbm",
 ]
 
 
@@ -274,6 +278,26 @@ def build_oracle(
             learning_rate=0.05,
             max_depth=6,
             random_state=seed,
+        )
+    elif oracle_model == "xgboost":
+        model = XGBRegressor(
+            n_estimators=800,
+            learning_rate=0.05,
+            max_depth=6,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=seed,
+            n_jobs=-1,
+        )
+    elif oracle_model == "lightgbm":
+        model = LGBMRegressor(
+            n_estimators=800,
+            learning_rate=0.05,
+            num_leaves=31,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=seed,
+            n_jobs=-1,
         )
     else:
         raise ValueError(f"Unknown oracle model: {oracle_model}")
