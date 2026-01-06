@@ -68,6 +68,7 @@ class SimulationConfig:
     iterations: int
     jitter_iteration: int
     jitter_std: float
+    single_error: bool
     initial_samples: int
     candidate_pool: int
     objective: str
@@ -100,6 +101,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--jitter-iteration", type=int, default=20)
     parser.add_argument("--jitter-std", type=float, default=0.2)
+    parser.add_argument(
+        "--single-error",
+        action="store_true",
+        default=False,
+        help="Apply sensor error only once at the first iteration after jitter-iteration.",
+    )
     parser.add_argument("--jitter-iterations", type=str, default=None)
     parser.add_argument("--jitter-stds", type=str, default=None)
     parser.add_argument("--initial-samples", type=int, default=5)
@@ -377,6 +384,8 @@ def apply_sensor_error(
 ) -> tuple[float, float]:
     if iteration <= config.jitter_iteration:
         return true_value, 0.0
+    if config.single_error and iteration != config.jitter_iteration + 1:
+        return true_value, 0.0
 
     if config.error_model == "gaussian":
         jitter = rng.normal(0.0, config.jitter_std)
@@ -469,7 +478,13 @@ def run_simulation(
     results.insert(0, "iteration", np.arange(1, config.iterations + 1))
     results["objective_true"] = y_true
     results["objective_observed"] = y_observed
-    results["error_applied"] = apply_error & (results["iteration"] > config.jitter_iteration)
+    if apply_error:
+        if config.single_error:
+            results["error_applied"] = results["iteration"] == config.jitter_iteration + 1
+        else:
+            results["error_applied"] = results["iteration"] > config.jitter_iteration
+    else:
+        results["error_applied"] = False
     results["error_magnitude"] = error_magnitudes
     results["acquisition"] = acq.name
     results["fit_time_sec"] = fit_times
@@ -513,6 +528,7 @@ def main() -> None:
         iterations=args.iterations,
         jitter_iteration=args.jitter_iteration,
         jitter_std=args.jitter_std,
+        single_error=args.single_error,
         initial_samples=args.initial_samples,
         candidate_pool=args.candidate_pool,
         objective=args.objective,
