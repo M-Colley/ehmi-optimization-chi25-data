@@ -477,6 +477,7 @@ def run_simulation(
     results["run_id"] = run_id
     results["error_model"] = config.error_model if apply_error else "none"
     results["jitter_std"] = config.jitter_std if apply_error else 0.0
+    results["jitter_iteration"] = config.jitter_iteration
     return results
 
 
@@ -659,6 +660,8 @@ def main() -> None:
         merged_excess["seed"] = merged["seed"]
         merged_excess["objective"] = merged["objective"]
         merged_excess["error_model"] = merged["error_model_jitter"]
+        merged_excess["jitter_std"] = merged["jitter_std_jitter"]
+        merged_excess["jitter_iteration"] = merged["jitter_iteration"]
         merged_excess_path = output_dir / "bo_sensor_error_excess_summary.csv"
         merged_excess.to_csv(merged_excess_path, index=False)
 
