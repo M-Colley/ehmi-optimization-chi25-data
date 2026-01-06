@@ -133,7 +133,7 @@ def parse_args() -> argparse.Namespace:
         help="Apply sensor error only once at the first iteration after jitter-iteration.",
     )
     parser.add_argument("--jitter-iterations", type=str, default="10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95")
-    parser.add_argument("--jitter-stds", type=str, default="0.05,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.99")
+    parser.add_argument("--jitter-stds", type=str, default="0.05,0.1,0.2,0.5,1,2,3,4,5")
     parser.add_argument("--initial-samples", type=int, default=5)
     parser.add_argument("--candidate-pool", type=int, default=1000)
     parser.add_argument("--objective", type=str, default="composite", choices=OBJECTIVE_MAP)
