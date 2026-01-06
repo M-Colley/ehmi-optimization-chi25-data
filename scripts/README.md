@@ -9,7 +9,8 @@ questions using the eHMI study data:
 - **Testing 100 iterations (or more/less)**: run iterative Bayesian Optimization
   for a configurable number of iterations.
 - **After iteration 20, add artificial jitter to feedback values**: the simulation
-  supports `--jitter-iteration 20` and `--jitter-std` for magnitude.
+  supports `--jitter-iteration 20` and `--jitter-std` for magnitude. Use
+  `--single-error` to inject only one error after the jitter iteration.
 - **Testing different acquisition functions**: run `ei`, `pi`, `ucb`, or all.
 
 ## What this simulation does
@@ -102,6 +103,7 @@ in response to the first noisy observation.
 **3) “After iteration 20, add artificial jitter to the feedback values”**  
 This is the default behavior when `--jitter-iteration 20` is set. All
 iterations > 20 use `objective_observed = objective_true + jitter`.
+For a single injected error (only iteration 21), add `--single-error`.
 
 **4) “Testing different acquisition functions”**  
 Run `--acq all` to generate `bo_sensor_error_ei.csv`,
