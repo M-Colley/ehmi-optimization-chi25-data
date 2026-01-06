@@ -66,6 +66,15 @@ def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.Data
         mean_obs_diff = float(
             (group["objective_observed_jitter"] - group["objective_observed_baseline"]).mean()
         )
+        
+        # Calculate Cohen's d effect sizes
+        def cohens_d(group1, group2):
+            diff = group1 - group2
+            return diff.mean() / (diff.std() + 1e-10)  # Add small constant to avoid division by zero
+        
+        cohens_d_true = float(cohens_d(group["objective_true_jitter"], group["objective_true_baseline"]))
+        cohens_d_obs = float(cohens_d(group["objective_observed_jitter"], group["objective_observed_baseline"]))
+        
         true_p = float("nan")
         obs_p = float("nan")
         if n_runs >= 2:
@@ -90,14 +99,44 @@ def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.Data
                 "runs": n_runs,
                 "mean_true_diff": mean_true_diff,
                 "mean_observed_diff": mean_obs_diff,
+                "cohens_d_true": cohens_d_true,
+                "cohens_d_observed": cohens_d_obs,
                 "p_value_true": true_p,
                 "p_value_observed": obs_p,
             }
         )
 
     stats = pd.DataFrame(rows)
+    
+    # Apply Bonferroni correction
+    n_tests = len(stats) * 2  # multiply by 2 because we test both true and observed
+    stats["p_value_true_bonferroni"] = stats["p_value_true"] * n_tests
+    stats["p_value_observed_bonferroni"] = stats["p_value_observed"] * n_tests
+    # Cap corrected p-values at 1.0
+    stats["p_value_true_bonferroni"] = stats["p_value_true_bonferroni"].clip(upper=1.0)
+    stats["p_value_observed_bonferroni"] = stats["p_value_observed_bonferroni"].clip(upper=1.0)
+    
+    # Add significance flags (alpha = 0.05)
+    stats["significant_true_uncorrected"] = stats["p_value_true"] < 0.05
+    stats["significant_observed_uncorrected"] = stats["p_value_observed"] < 0.05
+    stats["significant_true_bonferroni"] = stats["p_value_true_bonferroni"] < 0.05
+    stats["significant_observed_bonferroni"] = stats["p_value_observed_bonferroni"] < 0.05
+    
     stats_path = output_dir / "final_outcome_significance.csv"
     stats.to_csv(stats_path, index=False)
+    
+    # Print summary
+    print("\nStatistical Testing Summary:")
+    print(f"Total number of comparisons: {len(stats)}")
+    print(f"Total number of tests: {n_tests}")
+    print(f"Bonferroni-corrected alpha: {0.05 / n_tests:.6f}")
+    print(f"\nSignificant results (uncorrected, alpha=0.05):")
+    print(f"  True objective: {stats['significant_true_uncorrected'].sum()}/{len(stats)}")
+    print(f"  Observed objective: {stats['significant_observed_uncorrected'].sum()}/{len(stats)}")
+    print(f"\nSignificant results (Bonferroni-corrected, alpha=0.05):")
+    print(f"  True objective: {stats['significant_true_bonferroni'].sum()}/{len(stats)}")
+    print(f"  Observed objective: {stats['significant_observed_bonferroni'].sum()}/{len(stats)}")
+    
     return stats
 
 
@@ -214,7 +253,7 @@ def plot_excess_adjustments(input_dir: Path, output_dir: Path) -> None:
         )
         plt.title(
             "Mean excess adjustment (L2 norm) "
-            f"- jitter={jitter_iteration}, std={jitter_std}"
+            f"- jitter={jitter_iteration}, std={jitter_std:.2f}"
         )
         plt.ylabel("Mean delta excess L2")
         plt.tight_layout()
