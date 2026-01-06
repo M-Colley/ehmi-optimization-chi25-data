@@ -4,7 +4,8 @@ Simulate sensor-error impacts in HITL Bayesian optimization using eHMI data.
 Example:
   python scripts/bo_sensor_error_simulation.py \
     --iterations 100 \
-    --jitter-iteration 20 \
+    --jitter-iterations 20,25,30 \
+    --jitter-stds 0.05,0.1,0.2,0.4 \
     --acq all \
     --output-dir /tmp/bo_sensor_error_output
 """
@@ -107,8 +108,8 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Apply sensor error only once at the first iteration after jitter-iteration.",
     )
-    parser.add_argument("--jitter-iterations", type=str, default=None)
-    parser.add_argument("--jitter-stds", type=str, default=None)
+    parser.add_argument("--jitter-iterations", type=str, default="20,25,30")
+    parser.add_argument("--jitter-stds", type=str, default="0.05,0.1,0.2,0.4")
     parser.add_argument("--initial-samples", type=int, default=5)
     parser.add_argument("--candidate-pool", type=int, default=1000)
     parser.add_argument("--objective", type=str, default="composite", choices=OBJECTIVE_MAP)
@@ -410,8 +411,9 @@ def apply_sensor_error(
 def validate_inputs(args: argparse.Namespace) -> None:
     if args.iterations <= 1:
         raise ValueError("iterations must be greater than 1.")
-    if args.jitter_iteration < 0 or args.jitter_iteration >= args.iterations:
-        raise ValueError("jitter-iteration must be within [0, iterations - 1].")
+    if args.jitter_iterations is None:
+        if args.jitter_iteration < 0 or args.jitter_iteration >= args.iterations:
+            raise ValueError("jitter-iteration must be within [0, iterations - 1].")
     if args.initial_samples < 1 or args.initial_samples >= args.iterations:
         raise ValueError("initial-samples must be within [1, iterations - 1].")
     if args.candidate_pool < 1:
@@ -426,6 +428,7 @@ def run_simulation(
     config: SimulationConfig,
     acq: AcquisitionConfig,
     rng: np.random.Generator,
+    jitter_rng: np.random.Generator | None,
     run_id: str,
     apply_error: bool,
 ) -> pd.DataFrame:
@@ -461,8 +464,10 @@ def run_simulation(
         if previous_observed is None:
             previous_observed = true_value
         if apply_error:
+            if jitter_rng is None:
+                raise ValueError("jitter_rng must be provided when apply_error is True.")
             observed_value, error_magnitude = apply_sensor_error(
-                true_value, iteration, config, rng, previous_observed
+                true_value, iteration, config, jitter_rng, previous_observed
             )
         else:
             observed_value, error_magnitude = true_value, 0.0
@@ -574,7 +579,8 @@ def main() -> None:
                     config,
                     acq,
                     run_rng,
-                    baseline_run_id,
+                    jitter_rng=None,
+                    run_id=baseline_run_id,
                     apply_error=False,
                 )
                 baseline_runtime = time.perf_counter() - run_start
@@ -602,6 +608,16 @@ def main() -> None:
                     for jitter_iteration in jitter_iterations:
                         run_id = str(uuid.uuid4())
                         run_rng = np.random.default_rng(seed)
+                        jitter_seed = np.random.SeedSequence(
+                            [
+                                seed,
+                                ACQUISITION_CHOICES.index(acq.name),
+                                jitter_iteration,
+                                int(round(jitter_std * 1_000_000)),
+                                ERROR_MODEL_CHOICES.index(error_model),
+                            ]
+                        )
+                        jitter_rng = np.random.default_rng(jitter_seed)
                         config = dataclasses.replace(
                             base_config,
                             seed=seed,
@@ -616,7 +632,8 @@ def main() -> None:
                             config,
                             acq,
                             run_rng,
-                            run_id,
+                            jitter_rng,
+                            run_id=run_id,
                             apply_error=True,
                         )
                         run_runtime = time.perf_counter() - run_start

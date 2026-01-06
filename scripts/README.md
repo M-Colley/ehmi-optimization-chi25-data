@@ -10,7 +10,9 @@ questions using the eHMI study data:
   for a configurable number of iterations.
 - **After iteration 20, add artificial jitter to feedback values**: the simulation
   supports `--jitter-iteration 20` and `--jitter-std` for magnitude. Use
-  `--single-error` to inject only one error after the jitter iteration.
+  `--single-error` to inject only one error after the jitter iteration. For
+  sweeps, use `--jitter-iterations` and `--jitter-stds` to evaluate multiple
+  start points and magnitudes.
 - **Testing different acquisition functions**: run `ei`, `pi`, `ucb`, or all.
 
 ## What this simulation does
@@ -35,8 +37,8 @@ python -m pip install --upgrade -r scripts/requirements.txt
 ```bash
 python scripts/bo_sensor_error_simulation.py \
   --iterations 100 \
-  --jitter-iteration 20 \
-  --jitter-std 0.2 \
+  --jitter-iterations 20,25,30 \
+  --jitter-stds 0.05,0.1,0.2,0.4 \
   --initial-samples 5 \
   --candidate-pool 1000 \
   --objective composite \
@@ -44,6 +46,11 @@ python scripts/bo_sensor_error_simulation.py \
   --seed 7 \
   --output-dir output/bo_sensor_error
 ```
+
+By default, the script now sweeps jitter start points (`20,25,30`) and jitter
+magnitudes (`0.05,0.1,0.2,0.4`). Override these with
+`--jitter-iterations` and `--jitter-stds` or pass a single
+`--jitter-iteration`/`--jitter-std` pair for a focused run.
 
 ### Baseline (no-jitter) comparison
 
@@ -76,6 +83,9 @@ python scripts/bo_sensor_error_simulation.py --no-baseline-run
   - Per-acquisition/seed **excess change** (jittered − baseline).
 - `bo_sensor_error_summary_stats.csv`
   - Mean/std summary by acquisition and baseline flag.
+- `final_outcome_significance.csv`
+  - Paired t-test results comparing baseline vs jittered **final outcomes**
+    (`objective_true` and `objective_observed`) for each sweep configuration.
 - `run_metadata.json`
   - CLI args, dataset path, package versions, and total runtime.
 
@@ -193,6 +203,13 @@ python scripts/bo_sensor_error_simulation.py \
   --error-spike-std 0.6
 ```
 
+## Deterministic jitter
+
+Sensor-error draws now use a dedicated random generator that is seeded from the
+base seed plus the jitter iteration, jitter magnitude, and error model. This
+makes jitter deterministic across sweeps and prevents the jitter random draws
+from perturbing the BO candidate sampling randomness.
+
 ## Acquisition hyperparameters
 
 Use `--xi` (EI/PI) and `--kappa` (UCB) to control exploration:
@@ -212,4 +229,5 @@ python scripts/plot_sensor_error_results.py \
 ```
 
 This produces objective trajectory plots per acquisition and a bar chart of
-mean `delta_l2_norm`.
+mean `delta_l2_norm`, plus p-value scatter plots summarizing whether the final
+outcomes differ significantly between baseline and jittered runs.
