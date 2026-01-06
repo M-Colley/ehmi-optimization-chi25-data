@@ -532,8 +532,17 @@ def main() -> None:
         },
         "runtime_sec": time.perf_counter() - runtime_start,
     }
+    def json_fallback(obj: object) -> object:
+        if isinstance(obj, Path):
+            return str(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.integer, np.floating)):
+            return obj.item()
+        return obj
+
     metadata_path = output_dir / "run_metadata.json"
-    metadata_path.write_text(json.dumps(metadata_payload, indent=2))
+    metadata_path.write_text(json.dumps(metadata_payload, indent=2, default=json_fallback))
 
     print("Simulation complete.")
     print(f"Results saved to: {output_dir}")
