@@ -580,7 +580,7 @@ def main() -> None:
                     acq,
                     run_rng,
                     jitter_rng=None,
-                    run_id=baseline_run_id,
+                    baseline_run_id,
                     apply_error=False,
                 )
                 baseline_runtime = time.perf_counter() - run_start
@@ -633,7 +633,7 @@ def main() -> None:
                             acq,
                             run_rng,
                             jitter_rng,
-                            run_id=run_id,
+                            run_id,
                             apply_error=True,
                         )
                         run_runtime = time.perf_counter() - run_start
