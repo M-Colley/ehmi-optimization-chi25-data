@@ -44,11 +44,12 @@ def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.Data
             [
                 "acquisition",
                 "seed",
+                "oracle_model",
                 "objective_true",
                 "objective_observed",
             ]
         ],
-        on=["acquisition", "seed"],
+        on=["acquisition", "seed", "oracle_model"],
         how="inner",
         suffixes=("_jitter", "_baseline"),
     )
@@ -56,9 +57,15 @@ def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.Data
         return pd.DataFrame()
 
     rows = []
-    group_cols = ["acquisition", "error_model", "jitter_iteration", "jitter_std"]
+    group_cols = [
+        "acquisition",
+        "error_model",
+        "jitter_iteration",
+        "jitter_std",
+        "oracle_model",
+    ]
     for keys, group in merged.groupby(group_cols):
-        acquisition, error_model, jitter_iteration, jitter_std = keys
+        acquisition, error_model, jitter_iteration, jitter_std, oracle_model = keys
         n_runs = len(group)
         mean_true_diff = float(
             (group["objective_true_jitter"] - group["objective_true_baseline"]).mean()
@@ -96,6 +103,7 @@ def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.Data
                 "error_model": error_model,
                 "jitter_iteration": jitter_iteration,
                 "jitter_std": jitter_std,
+                "oracle_model": oracle_model,
                 "runs": n_runs,
                 "mean_true_diff": mean_true_diff,
                 "mean_observed_diff": mean_obs_diff,
@@ -144,13 +152,20 @@ def plot_final_outcome_significance(stats: pd.DataFrame, output_dir: Path) -> No
     if stats.empty:
         return
     melted = stats.melt(
-        id_vars=["acquisition", "error_model", "jitter_iteration", "jitter_std", "runs"],
+        id_vars=[
+            "acquisition",
+            "error_model",
+            "jitter_iteration",
+            "jitter_std",
+            "oracle_model",
+            "runs",
+        ],
         value_vars=["p_value_true", "p_value_observed"],
         var_name="metric",
         value_name="p_value",
     )
-    for (error_model, jitter_iteration), data in melted.groupby(
-        ["error_model", "jitter_iteration"]
+    for (error_model, jitter_iteration, oracle_model), data in melted.groupby(
+        ["error_model", "jitter_iteration", "oracle_model"]
     ):
         plt.figure(figsize=(10, 4))
         sns.scatterplot(
@@ -163,37 +178,44 @@ def plot_final_outcome_significance(stats: pd.DataFrame, output_dir: Path) -> No
         plt.axhline(0.05, color="red", linestyle="--", linewidth=1)
         plt.title(
             "Final outcome significance (paired t-test) "
-            f"- {error_model}, jitter={jitter_iteration}"
+            f"- {error_model}, {oracle_model}, jitter={jitter_iteration}"
         )
         plt.ylabel("p-value")
         plt.xlabel("jitter_std")
         plt.tight_layout()
-        filename = f"final_outcome_pvalues_{error_model}_jit{jitter_iteration}.png"
+        filename = f"final_outcome_pvalues_{error_model}_{oracle_model}_jit{jitter_iteration}.png"
         plt.savefig(output_dir / filename, dpi=200)
         plt.close()
 
 
 def plot_objectives(df: pd.DataFrame, output_dir: Path) -> None:
-    group_cols = ["acquisition", "error_model", "jitter_std", "jitter_iteration", "iteration"]
+    group_cols = [
+        "acquisition",
+        "error_model",
+        "jitter_std",
+        "jitter_iteration",
+        "oracle_model",
+        "iteration",
+    ]
     grouped = (
         df.groupby(group_cols)[["objective_true", "objective_observed"]].mean().reset_index()
     )
-    for (acq, error_model, jitter_std, jitter_iteration), data in grouped.groupby(
-        ["acquisition", "error_model", "jitter_std", "jitter_iteration"]
+    for (acq, error_model, jitter_std, jitter_iteration, oracle_model), data in grouped.groupby(
+        ["acquisition", "error_model", "jitter_std", "jitter_iteration", "oracle_model"]
     ):
         plt.figure(figsize=(8, 4))
         sns.lineplot(data=data, x="iteration", y="objective_true", label="Objective (true)")
         sns.lineplot(data=data, x="iteration", y="objective_observed", label="Objective (observed)")
         plt.title(
             "Objective trajectory "
-            f"({acq}, {error_model}, jitter={jitter_iteration}, std={jitter_std})"
+            f"({acq}, {error_model}, {oracle_model}, jitter={jitter_iteration}, std={jitter_std})"
         )
         plt.xlabel("Iteration")
         plt.ylabel("Objective")
         plt.tight_layout()
         filename = (
             "objective_trajectory_"
-            f"{acq}_{error_model}_jit{jitter_iteration}_std{jitter_std}.png"
+            f"{acq}_{error_model}_{oracle_model}_jit{jitter_iteration}_std{jitter_std}.png"
         )
         plt.savefig(output_dir / filename, dpi=200)
         plt.close()
