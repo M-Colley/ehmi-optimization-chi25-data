@@ -91,15 +91,27 @@ class OracleModel:
         return float(self.model.predict(x.reshape(1, -1))[0])
 
 
+ACQUISITION_CHOICES = ["ei", "pi", "ucb", "lcb", "greedy", "ts"]
+ERROR_MODEL_CHOICES = ["gaussian", "bias", "drift", "dropout", "spike"]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--jitter-iteration", type=int, default=20)
     parser.add_argument("--jitter-std", type=float, default=0.2)
+    parser.add_argument("--jitter-iterations", type=str, default=None)
+    parser.add_argument("--jitter-stds", type=str, default=None)
     parser.add_argument("--initial-samples", type=int, default=5)
     parser.add_argument("--candidate-pool", type=int, default=1000)
     parser.add_argument("--objective", type=str, default="composite", choices=OBJECTIVE_MAP)
-    parser.add_argument("--acq", type=str, default="all", choices=["ei", "pi", "ucb", "all"])
+    parser.add_argument(
+        "--acq",
+        type=str,
+        default="all",
+        choices=ACQUISITION_CHOICES + ["all"],
+    )
+    parser.add_argument("--acq-list", type=str, default=None, help="Comma-separated acquisitions.")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--seeds", type=str, default=None, help="Comma-separated seeds.")
     parser.add_argument("--num-seeds", type=int, default=None, help="Number of sequential seeds.")
@@ -116,8 +128,9 @@ def parse_args() -> argparse.Namespace:
         "--error-model",
         type=str,
         default="gaussian",
-        choices=["gaussian", "bias", "drift", "dropout", "spike"],
+        choices=ERROR_MODEL_CHOICES + ["all"],
     )
+    parser.add_argument("--error-models", type=str, default=None, help="Comma-separated error models.")
     parser.add_argument("--error-bias", type=float, default=0.2)
     parser.add_argument("--error-drift", type=float, default=0.02)
     parser.add_argument("--error-spike-prob", type=float, default=0.1)
@@ -238,11 +251,28 @@ def upper_confidence_bound(mu: np.ndarray, sigma: np.ndarray, kappa: float) -> n
     return mu + kappa * sigma
 
 
+def lower_confidence_bound(mu: np.ndarray, sigma: np.ndarray, kappa: float) -> np.ndarray:
+    return mu - kappa * sigma
+
+
+def greedy_acquisition(mu: np.ndarray) -> np.ndarray:
+    return mu
+
+
+def thompson_sampling(
+    mu: np.ndarray,
+    sigma: np.ndarray,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    return rng.normal(mu, sigma)
+
+
 def acquisition_scores(
     acq: AcquisitionConfig,
     mu: np.ndarray,
     sigma: np.ndarray,
     best: float,
+    rng: np.random.Generator,
 ) -> np.ndarray:
     if acq.name == "ei":
         return expected_improvement(mu, sigma, best, acq.xi)
@@ -250,6 +280,12 @@ def acquisition_scores(
         return probability_improvement(mu, sigma, best, acq.xi)
     if acq.name == "ucb":
         return upper_confidence_bound(mu, sigma, acq.kappa)
+    if acq.name == "lcb":
+        return lower_confidence_bound(mu, sigma, acq.kappa)
+    if acq.name == "greedy":
+        return greedy_acquisition(mu)
+    if acq.name == "ts":
+        return thompson_sampling(mu, sigma, rng)
     raise ValueError(f"Unknown acquisition: {acq.name}")
 
 
@@ -267,6 +303,59 @@ def parse_seed_list(seed_arg: str | None, seed: int, num_seeds: int | None) -> l
     if num_seeds:
         return list(range(seed, seed + num_seeds))
     return [seed]
+
+
+def parse_acquisition_list(acq_arg: str, acq_list: str | None) -> list[str]:
+    raw = acq_list or acq_arg
+    if raw == "all":
+        return ACQUISITION_CHOICES
+    values = [value.strip() for value in raw.split(",") if value.strip()]
+    if not values:
+        raise ValueError("At least one acquisition must be specified.")
+    unknown = [value for value in values if value not in ACQUISITION_CHOICES]
+    if unknown:
+        raise ValueError(f"Unknown acquisition(s): {', '.join(unknown)}")
+    return values
+
+
+def parse_error_models(error_model: str, error_models: str | None) -> list[str]:
+    raw = error_models or error_model
+    if raw == "all":
+        return ERROR_MODEL_CHOICES
+    values = [value.strip() for value in raw.split(",") if value.strip()]
+    if not values:
+        raise ValueError("At least one error model must be specified.")
+    unknown = [value for value in values if value not in ERROR_MODEL_CHOICES]
+    if unknown:
+        raise ValueError(f"Unknown error model(s): {', '.join(unknown)}")
+    return values
+
+
+def parse_float_list(value: str | None, default: float) -> list[float]:
+    if value is None:
+        return [default]
+    values = [float(item.strip()) for item in value.split(",") if item.strip()]
+    return values or [default]
+
+
+def parse_int_list(value: str | None, default: int) -> list[int]:
+    if value is None:
+        return [default]
+    values = [int(item.strip()) for item in value.split(",") if item.strip()]
+    return values or [default]
+
+
+def validate_sweeps(
+    jitter_iterations: list[int],
+    jitter_stds: list[float],
+    iterations: int,
+) -> None:
+    for jitter_iteration in jitter_iterations:
+        if jitter_iteration < 0 or jitter_iteration >= iterations:
+            raise ValueError("jitter-iteration must be within [0, iterations - 1].")
+    for jitter_std in jitter_stds:
+        if jitter_std < 0:
+            raise ValueError("jitter-std must be >= 0.")
 
 
 def parse_objective_weights(weights_arg: str | None, objective: str) -> np.ndarray | None:
@@ -356,7 +445,7 @@ def run_simulation(
             pool_scaled = scale_inputs(bounds, candidate_pool)
             mu, std = gp.predict(pool_scaled, return_std=True)
             best = float(np.max(y_array))
-            scores = acquisition_scores(acq, mu, std, best)
+            scores = acquisition_scores(acq, mu, std, best, rng)
             candidate = candidate_pool[int(np.argmax(scores))]
 
         true_value = oracle.predict(candidate)
@@ -388,6 +477,7 @@ def run_simulation(
     results["run_id"] = run_id
     results["error_model"] = config.error_model if apply_error else "none"
     results["jitter_std"] = config.jitter_std if apply_error else 0.0
+    results["jitter_iteration"] = config.jitter_iteration
     return results
 
 
@@ -437,14 +527,15 @@ def main() -> None:
         objective_weights=weights,
     )
 
-    if args.acq == "all":
-        acquisitions = [
-            AcquisitionConfig("ei", xi=args.xi, kappa=args.kappa),
-            AcquisitionConfig("pi", xi=args.xi, kappa=args.kappa),
-            AcquisitionConfig("ucb", xi=args.xi, kappa=args.kappa),
-        ]
-    else:
-        acquisitions = [AcquisitionConfig(args.acq, xi=args.xi, kappa=args.kappa)]
+    acquisition_names = parse_acquisition_list(args.acq, args.acq_list)
+    acquisitions = [
+        AcquisitionConfig(name, xi=args.xi, kappa=args.kappa)
+        for name in acquisition_names
+    ]
+    error_models = parse_error_models(args.error_model, args.error_models)
+    jitter_stds = parse_float_list(args.jitter_stds, args.jitter_std)
+    jitter_iterations = parse_int_list(args.jitter_iterations, args.jitter_iteration)
+    validate_sweeps(jitter_iterations, jitter_stds, args.iterations)
 
     output_dir = ensure_output_dir(args.output_dir)
     summaries = []
@@ -453,33 +544,87 @@ def main() -> None:
     seeds = parse_seed_list(args.seeds, args.seed, args.num_seeds)
     for acq in acquisitions:
         for seed in seeds:
-            for is_baseline in [True, False]:
-                if is_baseline and not args.baseline_run:
-                    continue
-                run_id = str(uuid.uuid4())
+            baseline_results = None
+            baseline_run_id = None
+            baseline_runtime = None
+            if args.baseline_run:
+                baseline_run_id = str(uuid.uuid4())
                 run_rng = np.random.default_rng(seed)
                 config = dataclasses.replace(base_config, seed=seed)
-                apply_error = not is_baseline
                 run_start = time.perf_counter()
-                results = run_simulation(oracle, bounds, config, acq, run_rng, run_id, apply_error)
-                run_runtime = time.perf_counter() - run_start
-                run_tag = "baseline" if is_baseline else "jittered"
-                results_path = output_dir / f"bo_sensor_error_{acq.name}_seed{seed}_{run_tag}.csv"
-                results.to_csv(results_path, index=False)
+                baseline_results = run_simulation(
+                    oracle,
+                    bounds,
+                    config,
+                    acq,
+                    run_rng,
+                    baseline_run_id,
+                    apply_error=False,
+                )
+                baseline_runtime = time.perf_counter() - run_start
+                results_path = output_dir / f"bo_sensor_error_{acq.name}_seed{seed}_baseline.csv"
+                baseline_results.to_csv(results_path, index=False)
 
-                summary = summarize_adjustment(results, args.jitter_iteration)
-                summary["acquisition"] = acq.name
-                summary["objective"] = args.objective
-                summary["jitter_std"] = results["jitter_std"].iloc[0]
-                summary["iterations"] = args.iterations
-                summary["seed"] = seed
-                summary["run_id"] = run_id
-                summary["error_model"] = results["error_model"].iloc[0]
-                summary["baseline"] = is_baseline
-                summary["xi"] = acq.xi
-                summary["kappa"] = acq.kappa
-                summary["runtime_sec"] = run_runtime
-                summaries.append(summary)
+                for jitter_iteration in jitter_iterations:
+                    summary = summarize_adjustment(baseline_results, jitter_iteration)
+                    summary["acquisition"] = acq.name
+                    summary["objective"] = args.objective
+                    summary["jitter_std"] = baseline_results["jitter_std"].iloc[0]
+                    summary["jitter_iteration"] = jitter_iteration
+                    summary["iterations"] = args.iterations
+                    summary["seed"] = seed
+                    summary["run_id"] = baseline_run_id
+                    summary["error_model"] = baseline_results["error_model"].iloc[0]
+                    summary["baseline"] = True
+                    summary["xi"] = acq.xi
+                    summary["kappa"] = acq.kappa
+                    summary["runtime_sec"] = baseline_runtime
+                    summaries.append(summary)
+
+            for error_model in error_models:
+                for jitter_std in jitter_stds:
+                    for jitter_iteration in jitter_iterations:
+                        run_id = str(uuid.uuid4())
+                        run_rng = np.random.default_rng(seed)
+                        config = dataclasses.replace(
+                            base_config,
+                            seed=seed,
+                            error_model=error_model,
+                            jitter_std=jitter_std,
+                            jitter_iteration=jitter_iteration,
+                        )
+                        run_start = time.perf_counter()
+                        results = run_simulation(
+                            oracle,
+                            bounds,
+                            config,
+                            acq,
+                            run_rng,
+                            run_id,
+                            apply_error=True,
+                        )
+                        run_runtime = time.perf_counter() - run_start
+                        results_path = output_dir / (
+                            "bo_sensor_error_"
+                            f"{acq.name}_seed{seed}_jittered_"
+                            f"{error_model}_jit{jitter_iteration}_std{jitter_std}.csv"
+                        )
+                        results.to_csv(results_path, index=False)
+
+                        summary = summarize_adjustment(results, jitter_iteration)
+                        summary["acquisition"] = acq.name
+                        summary["objective"] = args.objective
+                        summary["jitter_std"] = results["jitter_std"].iloc[0]
+                        summary["jitter_iteration"] = jitter_iteration
+                        summary["iterations"] = args.iterations
+                        summary["seed"] = seed
+                        summary["run_id"] = run_id
+                        summary["error_model"] = results["error_model"].iloc[0]
+                        summary["baseline"] = False
+                        summary["xi"] = acq.xi
+                        summary["kappa"] = acq.kappa
+                        summary["runtime_sec"] = run_runtime
+                        summaries.append(summary)
 
     summary_df = pd.DataFrame(summaries)
     summary_path = output_dir / "bo_sensor_error_summary.csv"
@@ -490,7 +635,15 @@ def main() -> None:
         baseline = summary_df[summary_df["baseline"] == True]
         merged = jittered.merge(
             baseline,
-            on=["acquisition", "objective", "iterations", "seed", "xi", "kappa"],
+            on=[
+                "acquisition",
+                "objective",
+                "iterations",
+                "jitter_iteration",
+                "seed",
+                "xi",
+                "kappa",
+            ],
             suffixes=("_jitter", "_baseline"),
         )
         excess = {}
@@ -507,11 +660,15 @@ def main() -> None:
         merged_excess["seed"] = merged["seed"]
         merged_excess["objective"] = merged["objective"]
         merged_excess["error_model"] = merged["error_model_jitter"]
+        merged_excess["jitter_std"] = merged["jitter_std_jitter"]
+        merged_excess["jitter_iteration"] = merged["jitter_iteration"]
         merged_excess_path = output_dir / "bo_sensor_error_excess_summary.csv"
         merged_excess.to_csv(merged_excess_path, index=False)
 
     stats = (
-        summary_df.groupby(["acquisition", "baseline", "error_model"])
+        summary_df.groupby(
+            ["acquisition", "baseline", "error_model", "jitter_iteration", "jitter_std"]
+        )
         .agg(
             delta_l2_mean=("delta_l2_norm", "mean"),
             delta_l2_std=("delta_l2_norm", "std"),
@@ -524,6 +681,12 @@ def main() -> None:
 
     metadata_payload = {
         "args": vars(args),
+        "sweep": {
+            "acquisitions": acquisition_names,
+            "error_models": error_models,
+            "jitter_stds": jitter_stds,
+            "jitter_iterations": jitter_iterations,
+        },
         "package_versions": {
             "numpy": metadata.version("numpy"),
             "pandas": metadata.version("pandas"),
@@ -532,8 +695,17 @@ def main() -> None:
         },
         "runtime_sec": time.perf_counter() - runtime_start,
     }
+    def json_fallback(obj: object) -> object:
+        if isinstance(obj, Path):
+            return str(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.integer, np.floating)):
+            return obj.item()
+        return obj
+
     metadata_path = output_dir / "run_metadata.json"
-    metadata_path.write_text(json.dumps(metadata_payload, indent=2))
+    metadata_path.write_text(json.dumps(metadata_payload, indent=2, default=json_fallback))
 
     print("Simulation complete.")
     print(f"Results saved to: {output_dir}")

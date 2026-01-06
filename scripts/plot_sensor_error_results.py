@@ -25,21 +25,28 @@ def load_iteration_logs(input_dir: Path) -> pd.DataFrame:
 
 
 def plot_objectives(df: pd.DataFrame, output_dir: Path) -> None:
-    jittered = df[df["error_model"] != "none"]
+    group_cols = ["acquisition", "error_model", "jitter_std", "jitter_iteration", "iteration"]
     grouped = (
-        jittered.groupby(["acquisition", "iteration"])[["objective_true", "objective_observed"]]
-        .mean()
-        .reset_index()
+        df.groupby(group_cols)[["objective_true", "objective_observed"]].mean().reset_index()
     )
-    for acq, data in grouped.groupby("acquisition"):
+    for (acq, error_model, jitter_std, jitter_iteration), data in grouped.groupby(
+        ["acquisition", "error_model", "jitter_std", "jitter_iteration"]
+    ):
         plt.figure(figsize=(8, 4))
         sns.lineplot(data=data, x="iteration", y="objective_true", label="Objective (true)")
         sns.lineplot(data=data, x="iteration", y="objective_observed", label="Objective (observed)")
-        plt.title(f"Objective trajectory ({acq})")
+        plt.title(
+            "Objective trajectory "
+            f"({acq}, {error_model}, jitter={jitter_iteration}, std={jitter_std})"
+        )
         plt.xlabel("Iteration")
         plt.ylabel("Objective")
         plt.tight_layout()
-        plt.savefig(output_dir / f"objective_trajectory_{acq}.png", dpi=200)
+        filename = (
+            "objective_trajectory_"
+            f"{acq}_{error_model}_jit{jitter_iteration}_std{jitter_std}.png"
+        )
+        plt.savefig(output_dir / filename, dpi=200)
         plt.close()
 
 
@@ -48,18 +55,64 @@ def plot_adjustments(input_dir: Path, output_dir: Path) -> None:
     if not summary_stats.exists():
         return
     stats = pd.read_csv(summary_stats)
-    plt.figure(figsize=(7, 4))
-    sns.barplot(
-        data=stats,
-        x="acquisition",
-        y="delta_l2_mean",
-        hue="baseline",
+    for (error_model, jitter_iteration), data in stats.groupby(
+        ["error_model", "jitter_iteration"]
+    ):
+        plot = sns.catplot(
+            data=data,
+            x="acquisition",
+            y="delta_l2_mean",
+            hue="baseline",
+            col="jitter_std",
+            kind="bar",
+            height=4,
+            aspect=1.1,
+        )
+        plot.fig.suptitle(
+            f"Mean parameter adjustment (L2 norm) - {error_model} (jitter={jitter_iteration})"
+        )
+        plot.set_axis_labels("acquisition", "Mean delta L2")
+        plot.tight_layout()
+        filename = f"delta_l2_mean_{error_model}_jit{jitter_iteration}.png"
+        plot.savefig(output_dir / filename, dpi=200)
+        plt.close(plot.fig)
+
+
+def plot_excess_adjustments(input_dir: Path, output_dir: Path) -> None:
+    excess_path = input_dir / "bo_sensor_error_excess_summary.csv"
+    if not excess_path.exists():
+        return
+    excess = pd.read_csv(excess_path)
+    summary = (
+        excess.groupby(["acquisition", "error_model", "jitter_iteration", "jitter_std"])
+        .agg(
+            delta_excess_l2_mean=("delta_excess_l2_norm", "mean"),
+            delta_excess_l2_std=("delta_excess_l2_norm", "std"),
+            runs=("delta_excess_l2_norm", "count"),
+        )
+        .reset_index()
     )
-    plt.title("Mean parameter adjustment (L2 norm)")
-    plt.ylabel("Mean delta L2")
-    plt.tight_layout()
-    plt.savefig(output_dir / "delta_l2_mean_by_acquisition.png", dpi=200)
-    plt.close()
+    for (jitter_iteration, jitter_std), data in summary.groupby(
+        ["jitter_iteration", "jitter_std"]
+    ):
+        plt.figure(figsize=(8, 4))
+        sns.barplot(
+            data=data,
+            x="acquisition",
+            y="delta_excess_l2_mean",
+            hue="error_model",
+        )
+        plt.title(
+            "Mean excess adjustment (L2 norm) "
+            f"- jitter={jitter_iteration}, std={jitter_std}"
+        )
+        plt.ylabel("Mean delta excess L2")
+        plt.tight_layout()
+        plt.savefig(
+            output_dir / f"delta_excess_l2_mean_jit{jitter_iteration}_std{jitter_std}.png",
+            dpi=200,
+        )
+        plt.close()
 
 
 def main() -> None:
@@ -68,6 +121,7 @@ def main() -> None:
     logs = load_iteration_logs(args.input_dir)
     plot_objectives(logs, args.output_dir)
     plot_adjustments(args.input_dir, args.output_dir)
+    plot_excess_adjustments(args.input_dir, args.output_dir)
     print(f"Plots saved to: {args.output_dir}")
 
 
