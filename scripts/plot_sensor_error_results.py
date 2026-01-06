@@ -7,6 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from scipy.stats import ttest_rel
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,6 +23,115 @@ def load_iteration_logs(input_dir: Path) -> pd.DataFrame:
         raise FileNotFoundError("No per-iteration logs found in input-dir.")
     frames = [pd.read_csv(path) for path in files]
     return pd.concat(frames, ignore_index=True)
+
+
+def summarize_final_outcomes(df: pd.DataFrame) -> pd.DataFrame:
+    final_rows = (
+        df.sort_values("iteration")
+        .groupby("run_id", as_index=False)
+        .tail(1)
+        .reset_index(drop=True)
+    )
+    final_rows["baseline"] = final_rows["error_model"] == "none"
+    return final_rows
+
+
+def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
+    baseline = final_df[final_df["baseline"]].copy()
+    jittered = final_df[~final_df["baseline"]].copy()
+    merged = jittered.merge(
+        baseline[
+            [
+                "acquisition",
+                "seed",
+                "objective_true",
+                "objective_observed",
+            ]
+        ],
+        on=["acquisition", "seed"],
+        how="inner",
+        suffixes=("_jitter", "_baseline"),
+    )
+    if merged.empty:
+        return pd.DataFrame()
+
+    rows = []
+    group_cols = ["acquisition", "error_model", "jitter_iteration", "jitter_std"]
+    for keys, group in merged.groupby(group_cols):
+        acquisition, error_model, jitter_iteration, jitter_std = keys
+        n_runs = len(group)
+        mean_true_diff = float(
+            (group["objective_true_jitter"] - group["objective_true_baseline"]).mean()
+        )
+        mean_obs_diff = float(
+            (group["objective_observed_jitter"] - group["objective_observed_baseline"]).mean()
+        )
+        true_p = float("nan")
+        obs_p = float("nan")
+        if n_runs >= 2:
+            true_test = ttest_rel(
+                group["objective_true_jitter"],
+                group["objective_true_baseline"],
+                nan_policy="omit",
+            )
+            obs_test = ttest_rel(
+                group["objective_observed_jitter"],
+                group["objective_observed_baseline"],
+                nan_policy="omit",
+            )
+            true_p = float(true_test.pvalue)
+            obs_p = float(obs_test.pvalue)
+        rows.append(
+            {
+                "acquisition": acquisition,
+                "error_model": error_model,
+                "jitter_iteration": jitter_iteration,
+                "jitter_std": jitter_std,
+                "runs": n_runs,
+                "mean_true_diff": mean_true_diff,
+                "mean_observed_diff": mean_obs_diff,
+                "p_value_true": true_p,
+                "p_value_observed": obs_p,
+            }
+        )
+
+    stats = pd.DataFrame(rows)
+    stats_path = output_dir / "final_outcome_significance.csv"
+    stats.to_csv(stats_path, index=False)
+    return stats
+
+
+def plot_final_outcome_significance(stats: pd.DataFrame, output_dir: Path) -> None:
+    if stats.empty:
+        return
+    melted = stats.melt(
+        id_vars=["acquisition", "error_model", "jitter_iteration", "jitter_std", "runs"],
+        value_vars=["p_value_true", "p_value_observed"],
+        var_name="metric",
+        value_name="p_value",
+    )
+    for (error_model, jitter_iteration), data in melted.groupby(
+        ["error_model", "jitter_iteration"]
+    ):
+        plt.figure(figsize=(10, 4))
+        sns.scatterplot(
+            data=data,
+            x="jitter_std",
+            y="p_value",
+            hue="metric",
+            style="acquisition",
+        )
+        plt.axhline(0.05, color="red", linestyle="--", linewidth=1)
+        plt.title(
+            "Final outcome significance (paired t-test) "
+            f"- {error_model}, jitter={jitter_iteration}"
+        )
+        plt.ylabel("p-value")
+        plt.xlabel("jitter_std")
+        plt.tight_layout()
+        filename = f"final_outcome_pvalues_{error_model}_jit{jitter_iteration}.png"
+        plt.savefig(output_dir / filename, dpi=200)
+        plt.close()
 
 
 def plot_objectives(df: pd.DataFrame, output_dir: Path) -> None:
@@ -122,6 +232,9 @@ def main() -> None:
     plot_objectives(logs, args.output_dir)
     plot_adjustments(args.input_dir, args.output_dir)
     plot_excess_adjustments(args.input_dir, args.output_dir)
+    final_outcomes = summarize_final_outcomes(logs)
+    stats = evaluate_final_outcomes(final_outcomes, args.output_dir)
+    plot_final_outcome_significance(stats, args.output_dir)
     print(f"Plots saved to: {args.output_dir}")
 
 
