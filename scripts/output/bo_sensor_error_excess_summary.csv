@@ -1,0 +1,4 @@
+delta_excess_verticalPosition,delta_excess_verticalWidth,delta_excess_horizontalWidth,delta_excess_r,delta_excess_g,delta_excess_b,delta_excess_a,delta_excess_blinkFrequency,delta_excess_volume,delta_excess_l2_norm,acquisition,seed,objective,error_model
+0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,ei,7,composite,gaussian
+0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,pi,7,composite,gaussian
+0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,ucb,7,composite,gaussian
