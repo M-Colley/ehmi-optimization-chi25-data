@@ -6,8 +6,12 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 import seaborn as sns
 from scipy.stats import ttest_rel
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
+from statsmodels.formula.api import ols
+from statsmodels.stats.anova import anova_lm
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,7 +38,6 @@ def summarize_final_outcomes(df: pd.DataFrame) -> pd.DataFrame:
     )
     final_rows["baseline"] = final_rows["error_model"] == "none"
     return final_rows
-
 
 
 def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -> dict:
@@ -78,50 +81,133 @@ def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -
         print(f"\n{metric_name} Difference:")
         print("-" * 80)
         
-        # Fit mixed ANOVA model
-        formula = f"{metric} ~ C(acquisition) * C(error_model) * C(jitter_std) * C(jitter_iteration)"
+        # Check which factors have multiple levels
+        factors = {
+            'acquisition': merged['acquisition'].nunique(),
+            'error_model': merged['error_model'].nunique(),
+            'jitter_std': merged['jitter_std'].nunique(),
+            'jitter_iteration': merged['jitter_iteration'].nunique(),
+            'oracle_model': merged['oracle_model'].nunique(),
+        }
         
-        try:
-            model = ols(formula, data=merged).fit()
-            anova_table = anova_lm(model, typ=2)
-            
-            # Calculate effect sizes (eta-squared)
-            anova_table['eta_sq'] = anova_table['sum_sq'] / anova_table['sum_sq'].sum()
-            anova_table['omega_sq'] = (
-                (anova_table['sum_sq'] - anova_table['df'] * model.mse_resid) / 
-                (anova_table['sum_sq'].sum() + model.mse_resid)
+        print(f"Factor levels: {factors}")
+        print(f"Total observations: {len(merged)}")
+        
+        # Build formula dynamically based on available factors
+        valid_factors = [f for f, n in factors.items() if n >= 2]
+        
+        if len(valid_factors) == 0:
+            print("Warning: No factors with 2+ levels. Cannot perform ANOVA.")
+            continue
+        
+        # Check if we have enough observations for interaction terms
+        # Rule of thumb: need at least 20 observations per parameter
+        total_combinations = np.prod([factors[f] for f in valid_factors])
+        min_obs_needed = total_combinations * 2  # At least 2 obs per cell
+        
+        print(f"Unique factor combinations: {total_combinations}")
+        print(f"Minimum observations needed: {min_obs_needed}")
+        
+        # Start with full model and fall back to simpler models if needed
+        models_to_try = []
+        
+        if len(valid_factors) >= 3 and len(merged) >= min_obs_needed:
+            # Try full interaction model
+            models_to_try.append(
+                (f"{metric} ~ " + " * ".join([f"C({f})" for f in valid_factors]), "full interaction")
+            )
+        
+        if len(valid_factors) >= 2:
+            # Try additive model (main effects only)
+            models_to_try.append(
+                (f"{metric} ~ " + " + ".join([f"C({f})" for f in valid_factors]), "main effects only")
             )
             
-            print(anova_table.to_string())
+            # Try two-way interactions if we have enough data
+            if len(valid_factors) == 2 and len(merged) >= min_obs_needed:
+                models_to_try.append(
+                    (f"{metric} ~ C({valid_factors[0]}) * C({valid_factors[1]})", "two-way interaction")
+                )
+        
+        if len(valid_factors) == 1:
+            models_to_try.append(
+                (f"{metric} ~ C({valid_factors[0]})", "single factor")
+            )
+        
+        # Try models in order until one works
+        anova_success = False
+        for formula, description in models_to_try:
+            print(f"\nTrying ANOVA: {description}")
+            print(f"Formula: {formula}")
             
-            results[f'anova_{metric}'] = anova_table
-            
-            # Interpret main effects
-            print("\nEffect Size Interpretation (eta-squared):")
-            for idx, row in anova_table.iterrows():
-                if row['eta_sq'] >= 0.14:
-                    size = "LARGE"
-                elif row['eta_sq'] >= 0.06:
-                    size = "MEDIUM"
-                elif row['eta_sq'] >= 0.01:
-                    size = "SMALL"
-                else:
-                    size = "negligible"
+            try:
+                model = ols(formula, data=merged).fit()
                 
-                if row['PR(>F)'] < 0.001:
-                    sig = "***"
-                elif row['PR(>F)'] < 0.01:
-                    sig = "**"
-                elif row['PR(>F)'] < 0.05:
-                    sig = "*"
+                # Check for infinite or NaN values
+                if not np.all(np.isfinite(model.params)):
+                    print("  Warning: Model parameters contain infinite or NaN values. Trying simpler model...")
+                    continue
+                
+                anova_table = anova_lm(model, typ=2)
+                
+                # Check if ANOVA table is valid
+                if anova_table['sum_sq'].isna().all() or not np.all(np.isfinite(anova_table['sum_sq'])):
+                    print("  Warning: ANOVA table contains invalid values. Trying simpler model...")
+                    continue
+                
+                # Calculate effect sizes (eta-squared)
+                total_ss = anova_table['sum_sq'].sum()
+                if total_ss > 0:
+                    anova_table['eta_sq'] = anova_table['sum_sq'] / total_ss
+                    anova_table['omega_sq'] = (
+                        (anova_table['sum_sq'] - anova_table['df'] * model.mse_resid) / 
+                        (total_ss + model.mse_resid)
+                    )
                 else:
-                    sig = "ns"
+                    anova_table['eta_sq'] = np.nan
+                    anova_table['omega_sq'] = np.nan
+                
+                print("\n" + anova_table.to_string())
+                
+                results[f'anova_{metric}'] = anova_table
+                results[f'anova_{metric}_model'] = description
+                
+                # Interpret main effects
+                print("\nEffect Size Interpretation (eta-squared):")
+                for idx, row in anova_table.iterrows():
+                    if pd.isna(row['PR(>F)']) or pd.isna(row['eta_sq']):
+                        continue
                     
-                print(f"  {idx}: η² = {row['eta_sq']:.4f} ({size}) {sig}")
+                    if row['eta_sq'] >= 0.14:
+                        size = "LARGE"
+                    elif row['eta_sq'] >= 0.06:
+                        size = "MEDIUM"
+                    elif row['eta_sq'] >= 0.01:
+                        size = "SMALL"
+                    else:
+                        size = "negligible"
+                    
+                    if row['PR(>F)'] < 0.001:
+                        sig = "***"
+                    elif row['PR(>F)'] < 0.01:
+                        sig = "**"
+                    elif row['PR(>F)'] < 0.05:
+                        sig = "*"
+                    else:
+                        sig = "ns"
+                    
+                    print(f"  {idx}: η² = {row['eta_sq']:.4f} ({size}) {sig}")
                 
-        except Exception as e:
-            print(f"Error fitting ANOVA model: {e}")
-            continue
+                anova_success = True
+                break
+                
+            except Exception as e:
+                print(f"  Error: {e}")
+                continue
+        
+        if not anova_success:
+            print(f"\nCould not fit any ANOVA model for {metric_name}.")
+            print("Consider collecting more data or reducing the number of factors.")
     
     # ============================================================================
     # 2. POST-HOC TESTS (Tukey HSD for pairwise comparisons)
@@ -134,18 +220,46 @@ def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -
         metric_name = "True Objective" if metric == "true_diff" else "Observed Objective"
         
         # Post-hoc for acquisition strategies
-        print(f"\n{metric_name} - Pairwise Acquisition Comparisons:")
-        print("-" * 80)
-        tukey_acq = pairwise_tukeyhsd(merged[metric], merged['acquisition'])
-        print(tukey_acq)
-        results[f'tukey_acq_{metric}'] = tukey_acq
+        n_acquisitions = merged['acquisition'].nunique()
+        if n_acquisitions >= 2:
+            print(f"\n{metric_name} - Pairwise Acquisition Comparisons:")
+            print("-" * 80)
+            try:
+                tukey_acq = pairwise_tukeyhsd(merged[metric], merged['acquisition'])
+                print(tukey_acq)
+                results[f'tukey_acq_{metric}'] = tukey_acq
+            except Exception as e:
+                print(f"Could not perform Tukey HSD for acquisitions: {e}")
+        else:
+            print(f"\n{metric_name} - Skipping acquisition comparisons (only {n_acquisitions} group(s))")
         
         # Post-hoc for error models
-        print(f"\n{metric_name} - Pairwise Error Model Comparisons:")
-        print("-" * 80)
-        tukey_error = pairwise_tukeyhsd(merged[metric], merged['error_model'])
-        print(tukey_error)
-        results[f'tukey_error_{metric}'] = tukey_error
+        n_error_models = merged['error_model'].nunique()
+        if n_error_models >= 2:
+            print(f"\n{metric_name} - Pairwise Error Model Comparisons:")
+            print("-" * 80)
+            try:
+                tukey_error = pairwise_tukeyhsd(merged[metric], merged['error_model'])
+                print(tukey_error)
+                results[f'tukey_error_{metric}'] = tukey_error
+            except Exception as e:
+                print(f"Could not perform Tukey HSD for error models: {e}")
+        else:
+            print(f"\n{metric_name} - Skipping error model comparisons (only {n_error_models} group(s))")
+        
+        # Post-hoc for jitter_std if there are multiple levels
+        n_jitter_stds = merged['jitter_std'].nunique()
+        if n_jitter_stds >= 2:
+            print(f"\n{metric_name} - Pairwise Jitter Std Comparisons:")
+            print("-" * 80)
+            try:
+                tukey_jitter = pairwise_tukeyhsd(merged[metric], merged['jitter_std'])
+                print(tukey_jitter)
+                results[f'tukey_jitter_{metric}'] = tukey_jitter
+            except Exception as e:
+                print(f"Could not perform Tukey HSD for jitter_std: {e}")
+        else:
+            print(f"\n{metric_name} - Skipping jitter_std comparisons (only {n_jitter_stds} level(s))")
     
     # ============================================================================
     # 3. EFFECT SIZES (Cohen's d) for key comparisons
@@ -240,15 +354,27 @@ def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -
     print("SIMPLE EFFECTS ANALYSIS")
     print("="*80)
     
-    # Test effect of error_model at each level of jitter_std
-    for jitter_std_val in merged['jitter_std'].unique():
-        subset = merged[merged['jitter_std'] == jitter_std_val]
-        print(f"\nEffect of error_model at jitter_std={jitter_std_val}:")
-        
-        for metric in ['true_diff', 'obs_diff']:
-            groups = [group[metric].values for name, group in subset.groupby('error_model')]
-            f_stat, p_val = stats.f_oneway(*groups)
-            print(f"  {metric}: F={f_stat:.4f}, p={p_val:.4f}")
+    # Only perform if we have multiple error models and jitter_std levels
+    if merged['error_model'].nunique() >= 2 and merged['jitter_std'].nunique() >= 2:
+        # Test effect of error_model at each level of jitter_std
+        for jitter_std_val in sorted(merged['jitter_std'].unique()):
+            subset = merged[merged['jitter_std'] == jitter_std_val]
+            print(f"\nEffect of error_model at jitter_std={jitter_std_val}:")
+            
+            for metric in ['true_diff', 'obs_diff']:
+                groups = [group[metric].dropna().values for name, group in subset.groupby('error_model')]
+                # Only perform if we have at least 2 groups with data
+                if len(groups) >= 2 and all(len(g) > 0 for g in groups):
+                    try:
+                        f_stat, p_val = stats.f_oneway(*groups)
+                        sig = "***" if p_val < 0.001 else "**" if p_val < 0.01 else "*" if p_val < 0.05 else "ns"
+                        print(f"  {metric}: F={f_stat:.4f}, p={p_val:.4f} {sig}")
+                    except Exception as e:
+                        print(f"  {metric}: Could not compute F-test ({e})")
+                else:
+                    print(f"  {metric}: Insufficient groups for comparison")
+    else:
+        print("\nSkipping simple effects analysis - need multiple error models and jitter_std levels")
     
     print("\n" + "="*80)
     print("Analysis complete. Results saved to:", output_dir)
@@ -303,7 +429,6 @@ def generate_statistical_report(results: dict, output_dir: Path) -> None:
                 f.write(top_effects.to_string(index=False))
         
     print(f"\nStatistical report saved to: {report_path}")
-
 
 def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
     baseline = final_df[final_df["baseline"]].copy()
@@ -562,8 +687,8 @@ def main() -> None:
     plot_objectives(logs, args.output_dir)
     plot_adjustments(args.input_dir, args.output_dir)
     plot_excess_adjustments(args.input_dir, args.output_dir)
-    final_outcomes = summarize_final_outcomes_improved(logs)
-    stats = evaluate_final_outcomes(final_outcomes, args.output_dir)
+    final_outcomes = summarize_final_outcomes(logs)
+    stats = evaluate_final_outcomes_improved(final_outcomes, args.output_dir)
     plot_final_outcome_significance(stats, args.output_dir)
     print(f"Plots saved to: {args.output_dir}")
 
