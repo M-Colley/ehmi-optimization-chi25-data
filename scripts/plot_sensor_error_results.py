@@ -207,7 +207,53 @@ def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -
         
         if not anova_success:
             print(f"\nCould not fit any ANOVA model for {metric_name}.")
-            print("Consider collecting more data or reducing the number of factors.")
+            print("Falling back to separate one-way ANOVAs for each factor...")
+            
+            # Perform separate one-way ANOVAs for each factor
+            oneway_results = []
+            for factor in valid_factors:
+                print(f"\n  One-way ANOVA for {factor}:")
+                groups = [group[metric].dropna().values for name, group in merged.groupby(factor)]
+                
+                if len(groups) >= 2 and all(len(g) > 1 for g in groups):
+                    try:
+                        f_stat, p_val = stats.f_oneway(*groups)
+                        
+                        # Calculate eta-squared
+                        grand_mean = merged[metric].mean()
+                        ss_between = sum(len(g) * (g.mean() - grand_mean)**2 for g in groups)
+                        ss_total = sum((merged[metric] - grand_mean)**2)
+                        eta_sq = ss_between / ss_total if ss_total > 0 else 0
+                        
+                        if eta_sq >= 0.14:
+                            size = "LARGE"
+                        elif eta_sq >= 0.06:
+                            size = "MEDIUM"
+                        elif eta_sq >= 0.01:
+                            size = "SMALL"
+                        else:
+                            size = "negligible"
+                        
+                        sig = "***" if p_val < 0.001 else "**" if p_val < 0.01 else "*" if p_val < 0.05 else "ns"
+                        
+                        print(f"    F({len(groups)-1}, {len(merged)-len(groups)}) = {f_stat:.4f}, p = {p_val:.4f} {sig}")
+                        print(f"    η² = {eta_sq:.4f} ({size})")
+                        
+                        oneway_results.append({
+                            'metric': metric,
+                            'factor': factor,
+                            'F': f_stat,
+                            'p_value': p_val,
+                            'eta_sq': eta_sq,
+                            'interpretation': size
+                        })
+                    except Exception as e:
+                        print(f"    Error: {e}")
+                else:
+                    print(f"    Insufficient data for comparison")
+            
+            if oneway_results:
+                results[f'oneway_anova_{metric}'] = pd.DataFrame(oneway_results)
     
     # ============================================================================
     # 2. POST-HOC TESTS (Tukey HSD for pairwise comparisons)
@@ -338,14 +384,27 @@ def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -
     
     # Save ANOVA tables
     for key, value in results.items():
-        if 'anova' in key:
+        if 'anova' in key and isinstance(value, pd.DataFrame):
             value.to_csv(output_dir / f"{key}.csv")
+        elif 'tukey' in key and hasattr(value, 'summary'):
+            # Save Tukey results as DataFrame
+            summary_df = pd.DataFrame(data=value.summary().data[1:], columns=value.summary().data[0])
+            summary_df.to_csv(output_dir / f"{key}.csv", index=False)
     
     # Save effect sizes
-    effect_df.to_csv(output_dir / "effect_sizes_cohens_d.csv", index=False)
+    if 'effect_sizes' in results:
+        effect_df = results['effect_sizes']
+        effect_df.to_csv(output_dir / "effect_sizes_cohens_d.csv", index=False)
     
     # Save descriptive stats
-    desc_stats.to_csv(output_dir / "descriptive_statistics.csv")
+    if 'descriptive_stats' in results:
+        desc_stats = results['descriptive_stats']
+        desc_stats.to_csv(output_dir / "descriptive_statistics.csv")
+    
+    # Save one-way ANOVA results if available
+    for key in list(results.keys()):
+        if 'oneway_anova' in key and isinstance(results[key], pd.DataFrame):
+            results[key].to_csv(output_dir / f"{key}.csv", index=False)
     
     # ============================================================================
     # 6. SIMPLE EFFECTS ANALYSIS (if interaction is significant)
@@ -429,7 +488,6 @@ def generate_statistical_report(results: dict, output_dir: Path) -> None:
                 f.write(top_effects.to_string(index=False))
         
     print(f"\nStatistical report saved to: {report_path}")
-
 def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
     baseline = final_df[final_df["baseline"]].copy()
     jittered = final_df[~final_df["baseline"]].copy()
