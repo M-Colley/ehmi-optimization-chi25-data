@@ -14,6 +14,8 @@ from __future__ import annotations
 
 
 import os
+import sys
+import types
 
 # Set thread limits BEFORE importing numpy/torch/sklearn
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -89,6 +91,10 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 DEFAULT_DATASET_NAME = "default"
+if __name__ not in sys.modules:
+    current_module = types.ModuleType(__name__)
+    current_module.__dict__.update(globals())
+    sys.modules[__name__] = current_module
 
 PARAM_COLUMNS = [
     "verticalPosition",
