@@ -26,6 +26,7 @@ import argparse
 import dataclasses
 import importlib.metadata
 import json
+import subprocess
 import time
 import uuid 
 import warnings
@@ -256,6 +257,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Add a combined dataset when multiple datasets share objective/parameter columns.",
+    )
+    parser.add_argument(
+        "--dataset-cache-dir",
+        type=Path,
+        default=Path(".dataset_cache"),
+        help="Local cache directory for remote dataset repositories.",
     )
 
     parser.add_argument("--baseline-run", action="store_true", default=True)
@@ -694,7 +701,45 @@ def parse_oracle_models(oracle_model: str, oracle_models: str | None) -> list[st
     return values
 
 
-def parse_dataset_configs(data_dir: Path, dataset_config_path: Path | None) -> list[DatasetConfig]:
+def is_remote_dataset_path(value: str) -> bool:
+    return value.startswith(("http://", "https://", "git@")) or value.endswith(".git")
+
+
+def sanitize_repo_name(value: str) -> str:
+    trimmed = value.rstrip("/")
+    if trimmed.endswith(".git"):
+        trimmed = trimmed[:-4]
+    return trimmed.split("/")[-1]
+
+
+def fetch_remote_dataset(url: str, cache_dir: Path) -> Path:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    repo_name = sanitize_repo_name(url)
+    target_dir = cache_dir / repo_name
+    if target_dir.exists():
+        return target_dir
+    subprocess.run(
+        ["git", "clone", "--depth", "1", url, str(target_dir)],
+        check=True,
+    )
+    return target_dir
+
+
+def resolve_data_dirs(raw_dirs: list[str], cache_dir: Path) -> list[Path]:
+    resolved = []
+    for entry in raw_dirs:
+        if is_remote_dataset_path(entry):
+            resolved.append(fetch_remote_dataset(entry, cache_dir))
+        else:
+            resolved.append(Path(entry))
+    return resolved
+
+
+def parse_dataset_configs(
+    data_dir: Path,
+    dataset_config_path: Path | None,
+    cache_dir: Path,
+) -> list[DatasetConfig]:
     if dataset_config_path is None:
         return [
             DatasetConfig(
@@ -739,10 +784,11 @@ def parse_dataset_configs(data_dir: Path, dataset_config_path: Path | None) -> l
                 raise ValueError(f"Objective '{key}' for dataset '{name}' must be a list of columns.")
             cleaned_objective_map[str(key)] = [str(col) for col in value]
 
+        resolved_dirs = resolve_data_dirs([str(path) for path in data_dirs], cache_dir)
         datasets.append(
             DatasetConfig(
                 name=str(name),
-                data_dirs=[Path(path) for path in data_dirs],
+                data_dirs=resolved_dirs,
                 param_columns=[str(col) for col in param_columns],
                 objective_map=cleaned_objective_map,
                 observation_glob=str(observation_glob),
@@ -1570,7 +1616,11 @@ def main() -> None:
 
     acquisition_names = parse_acquisition_list(args.acq, args.acq_list)
 
-    dataset_configs = parse_dataset_configs(args.data_dir, args.dataset_config)
+    dataset_configs = parse_dataset_configs(
+        args.data_dir,
+        args.dataset_config,
+        args.dataset_cache_dir,
+    )
     if args.combine_datasets:
         combined = combine_dataset_configs(dataset_configs)
         if combined is not None:

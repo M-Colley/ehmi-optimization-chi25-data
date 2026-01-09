@@ -134,7 +134,7 @@ def test_parse_dataset_configs_from_json(tmp_path: Path) -> None:
         ]
         """
     )
-    datasets = bo_sim.parse_dataset_configs(Path("default"), config_path)
+    datasets = bo_sim.parse_dataset_configs(Path("default"), config_path, tmp_path)
     assert len(datasets) == 1
     assert datasets[0].name == "dataset_a"
     assert datasets[0].param_columns == ["p1", "p2"]
@@ -157,6 +157,20 @@ def test_combine_dataset_configs_intersection() -> None:
     combined = bo_sim.combine_dataset_configs([dataset_a, dataset_b], name="combined")
     assert combined is not None
     assert combined.objective_map == {"score": ["s1"]}
+
+
+def test_resolve_data_dirs_local(tmp_path: Path) -> None:
+    local_dir = tmp_path / "data"
+    local_dir.mkdir()
+    resolved = bo_sim.resolve_data_dirs([str(local_dir)], tmp_path)
+    assert resolved == [local_dir]
+
+
+def test_is_remote_dataset_path() -> None:
+    assert bo_sim.is_remote_dataset_path("https://github.com/M-Colley/opticarvis-data")
+    assert bo_sim.is_remote_dataset_path("git@github.com:M-Colley/opticarvis-data.git")
+    assert bo_sim.is_remote_dataset_path("https://github.com/M-Colley/opticarvis-data.git")
+    assert not bo_sim.is_remote_dataset_path("/tmp/opticarvis-data")
 
 
 def test_load_observations_multiple_dirs(tmp_path: Path) -> None:

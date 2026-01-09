@@ -178,6 +178,9 @@ python scripts/bo_sensor_error_simulation.py \
   --data-dir /path/to/eHMI-bo-participantdata
 ```
 
+You can also point `data_dir` (or any entry in `data_dirs`) to a remote Git repo
+URL. The script will clone it into `--dataset-cache-dir` before loading observations.
+
 ### Multiple datasets and custom objectives
 
 To evaluate **multiple datasets** (including datasets with different objective
@@ -201,7 +204,7 @@ columns), provide a JSON dataset config and optionally enable a combined dataset
   },
   {
     "name": "opticarvis",
-    "data_dir": "/path/to/opticarvis-data",
+    "data_dir": "https://github.com/M-Colley/opticarvis-data",
     "param_columns": ["verticalPosition", "verticalWidth", "horizontalWidth", "r", "g", "b", "a", "blinkFrequency", "volume"],
     "objective_map": {
       "composite": ["Trust", "Understanding", "PerceivedSafety", "Aesthetics", "Acceptance"],

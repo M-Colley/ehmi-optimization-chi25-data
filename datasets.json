@@ -25,7 +25,7 @@
   },
   {
     "name": "opticarvis",
-    "data_dir": "/path/to/opticarvis-data",
+    "data_dir": "https://github.com/M-Colley/opticarvis-data",
     "param_columns": [
       "verticalPosition",
       "verticalWidth",
