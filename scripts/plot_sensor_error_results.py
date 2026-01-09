@@ -1,4 +1,4 @@
-"""Plot outputs from bo_sensor_error_simulation.py."""
+"""Improved statistical evaluation with ANOVA and proper post-hoc tests."""
 from __future__ import annotations
 
 import argparse
@@ -38,6 +38,7 @@ def summarize_final_outcomes(df: pd.DataFrame) -> pd.DataFrame:
     )
     final_rows["baseline"] = final_rows["error_model"] == "none"
     return final_rows
+
 
 
 def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -> dict:
@@ -447,30 +448,31 @@ def generate_statistical_report(results: dict, output_dir: Path) -> None:
     """Generate a human-readable statistical report."""
     report_path = output_dir / "statistical_report.txt"
     
-    with open(report_path, 'w') as f:
+    # Use UTF-8 encoding to support Greek letters and other Unicode characters
+    with open(report_path, 'w', encoding='utf-8') as f:
         f.write("STATISTICAL ANALYSIS REPORT\n")
         f.write("=" * 80 + "\n\n")
         
         f.write("METHODOLOGY:\n")
         f.write("-" * 80 + "\n")
-        f.write("1. Mixed ANOVA with Type II sums of squares\n")
-        f.write("2. Post-hoc pairwise comparisons using Tukey HSD\n")
+        f.write("1. Mixed ANOVA with Type II sums of squares (or one-way ANOVAs if data limited)\n")
+        f.write("2. Post-hoc pairwise comparisons using Tukey HSD (when applicable)\n")
         f.write("3. Effect sizes: η² (eta-squared) and Cohen's d\n")
         f.write("4. Significance level: α = 0.05\n\n")
         
         f.write("INTERPRETATION GUIDELINES:\n")
         f.write("-" * 80 + "\n")
         f.write("Effect Size (Cohen's d):\n")
-        f.write("  - Small: 0.2 ≤ |d| < 0.5\n")
-        f.write("  - Medium: 0.5 ≤ |d| < 0.8\n")
-        f.write("  - Large: |d| ≥ 0.8\n\n")
+        f.write(" - Small: 0.2 ≤ |d| < 0.5\n")
+        f.write(" - Medium: 0.5 ≤ |d| < 0.8\n")
+        f.write(" - Large: |d| ≥ 0.8\n\n")
         f.write("Effect Size (η²):\n")
-        f.write("  - Small: 0.01 ≤ η² < 0.06\n")
-        f.write("  - Medium: 0.06 ≤ η² < 0.14\n")
-        f.write("  - Large: η² ≥ 0.14\n\n")
+        f.write(" - Small: 0.01 ≤ η² < 0.06\n")
+        f.write(" - Medium: 0.06 ≤ η² < 0.14\n")
+        f.write(" - Large: η² ≥ 0.14\n\n")
         
         # Summarize key findings
-        if 'effect_sizes' in results:
+        if 'effect_sizes' in results and not results['effect_sizes'].empty:
             effect_df = results['effect_sizes']
             large_effects = effect_df[
                 (effect_df['interpretation_true'] == 'LARGE') | 
@@ -486,8 +488,80 @@ def generate_statistical_report(results: dict, output_dir: Path) -> None:
                 f.write("Conditions with largest effects:\n")
                 top_effects = large_effects.nlargest(10, 'cohens_d_true')
                 f.write(top_effects.to_string(index=False))
+                f.write("\n\n")
+        else:
+            f.write("KEY FINDINGS:\n")
+            f.write("-" * 80 + "\n")
+            f.write("No effect size data available.\n\n")
         
+        # Summary of ANOVA results
+        for key in results.keys():
+            if 'anova_true_diff' == key or 'anova_obs_diff' == key:
+                metric = 'True Objective' if 'true' in key else 'Observed Objective'
+                f.write(f"\nANOVA RESULTS - {metric}:\n")
+                f.write("-" * 80 + "\n")
+                anova_table = results[key]
+                f.write(anova_table.to_string())
+                f.write("\n")
+                
+                # Model type used
+                model_key = f"{key}_model"
+                if model_key in results:
+                    f.write(f"\nModel type: {results[model_key]}\n")
+        
+        # Summary of one-way ANOVAs if used
+        for key in results.keys():
+            if 'oneway_anova' in key:
+                metric = 'True Objective' if 'true' in key else 'Observed Objective'
+                f.write(f"\nONE-WAY ANOVA RESULTS - {metric}:\n")
+                f.write("-" * 80 + "\n")
+                f.write(results[key].to_string(index=False))
+                f.write("\n\n")
+        
+        # Summary of post-hoc tests
+        tukey_found = False
+        for key in results.keys():
+            if 'tukey' in key:
+                tukey_found = True
+                break
+        
+        if tukey_found:
+            f.write("\nPOST-HOC TEST RESULTS:\n")
+            f.write("-" * 80 + "\n")
+            f.write("See individual CSV files for detailed Tukey HSD comparisons.\n\n")
+        
+        # Descriptive statistics summary
+        if 'descriptive_stats' in results:
+            f.write("\nDESCRIPTIVE STATISTICS:\n")
+            f.write("-" * 80 + "\n")
+            f.write("See descriptive_statistics.csv for detailed summaries.\n\n")
+        
+        # Data quality notes
+        f.write("\nDATA QUALITY NOTES:\n")
+        f.write("-" * 80 + "\n")
+        if 'effect_sizes' in results and not results['effect_sizes'].empty:
+            effect_df = results['effect_sizes']
+            total_n = effect_df['n'].sum()
+            min_n = effect_df['n'].min()
+            max_n = effect_df['n'].max()
+            mean_n = effect_df['n'].mean()
+            
+            f.write(f"Total observations: {total_n}\n")
+            f.write(f"Sample size per condition: min={min_n}, max={max_n}, mean={mean_n:.1f}\n")
+            
+            # Check for small sample sizes
+            small_n = effect_df[effect_df['n'] < 5]
+            if not small_n.empty:
+                f.write(f"\nWarning: {len(small_n)} condition(s) have fewer than 5 observations.\n")
+                f.write("Results for these conditions should be interpreted with caution.\n")
+        else:
+            f.write("No data quality information available.\n")
+    
     print(f"\nStatistical report saved to: {report_path}")
+    
+    
+    
+    
 def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.DataFrame:
     baseline = final_df[final_df["baseline"]].copy()
     jittered = final_df[~final_df["baseline"]].copy()
@@ -600,46 +674,123 @@ def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.Data
     return stats
 
 
-def plot_final_outcome_significance(stats: pd.DataFrame, output_dir: Path) -> None:
-    if stats.empty:
+def plot_final_outcome_significance(results: dict, output_dir: Path) -> None:
+    """Plot significance results from the statistical analysis."""
+    if not results or 'effect_sizes' not in results:
+        print("No statistical results to plot")
         return
-    melted = stats.melt(
-        id_vars=[
-            "acquisition",
-            "error_model",
-            "jitter_iteration",
-            "jitter_std",
-            "oracle_model",
-            "runs",
-        ],
-        value_vars=["p_value_true", "p_value_observed"],
-        var_name="metric",
-        value_name="p_value",
-    )
-    for (error_model, jitter_iteration, oracle_model), data in melted.groupby(
-        ["error_model", "jitter_iteration", "oracle_model"]
-    ):
-        plt.figure(figsize=(10, 4))
-        sns.scatterplot(
-            data=data,
-            x="jitter_std",
-            y="p_value",
-            hue="metric",
-            style="acquisition",
-        )
-        plt.axhline(0.05, color="red", linestyle="--", linewidth=1)
-        plt.title(
-            "Final outcome significance (paired t-test) "
-            f"- {error_model}, {oracle_model}, jitter={jitter_iteration}"
-        )
-        plt.ylabel("p-value")
-        plt.xlabel("jitter_std")
+    
+    stats = results['effect_sizes']
+    if stats.empty:
+        print("Effect sizes DataFrame is empty")
+        return
+    
+    # Plot 1: Effect sizes (Cohen's d) heatmap
+    for metric_suffix in ['true', 'obs']:
+        d_col = f'cohens_d_{metric_suffix}'
+        if d_col not in stats.columns:
+            print(f"Column {d_col} not found in stats")
+            continue
+        
+        # Group by key factors
+        for (error_model, oracle_model), data in stats.groupby(['error_model', 'oracle_model']):
+            if len(data) < 2:
+                print(f"Insufficient data for {error_model}, {oracle_model} ({len(data)} rows)")
+                continue
+            
+            # Create pivot table for heatmap
+            pivot_data = data.pivot_table(
+                values=d_col,
+                index='acquisition',
+                columns='jitter_std',
+                aggfunc='mean'
+            )
+            
+            # Check if pivot_data is empty or all NaN
+            if pivot_data.empty or pivot_data.isna().all().all():
+                print(f"No valid data for heatmap: {error_model}, {oracle_model}, {metric_suffix}")
+                continue
+            
+            # Check if there's at least some non-NaN data
+            if pivot_data.notna().sum().sum() == 0:
+                print(f"All NaN values in pivot table: {error_model}, {oracle_model}, {metric_suffix}")
+                continue
+            
+            plt.figure(figsize=(12, 6))
+            
+            try:
+                sns.heatmap(
+                    pivot_data,
+                    annot=True,
+                    fmt='.3f',
+                    cmap='RdYlGn',
+                    center=0,
+                    cbar_kws={'label': "Cohen's d"},
+                    mask=pivot_data.isna()  # Mask NaN values
+                )
+                
+                metric_name = 'True Objective' if metric_suffix == 'true' else 'Observed Objective'
+                plt.title(f"Effect Sizes ({metric_name}) - {error_model}, {oracle_model}")
+                plt.ylabel("Acquisition Strategy")
+                plt.xlabel("Jitter Std")
+                plt.tight_layout()
+                
+                filename = f"effect_sizes_{metric_suffix}_{error_model}_{oracle_model}.png"
+                plt.savefig(output_dir / filename, dpi=200)
+                print(f"Saved heatmap: {filename}")
+            except Exception as e:
+                print(f"Failed to create heatmap for {error_model}, {oracle_model}, {metric_suffix}: {e}")
+            finally:
+                plt.close()
+    
+    # Plot 2: Effect size distributions
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    plots_created = False
+    for idx, (metric_suffix, ax) in enumerate(zip(['true', 'obs'], axes)):
+        d_col = f'cohens_d_{metric_suffix}'
+        if d_col not in stats.columns:
+            print(f"Column {d_col} not found for distribution plot")
+            continue
+        
+        # Check if we have valid data
+        valid_data = stats[stats[d_col].notna()]
+        if valid_data.empty:
+            print(f"No valid data for distribution plot: {metric_suffix}")
+            continue
+        
+        try:
+            sns.boxplot(data=valid_data, x='acquisition', y=d_col, hue='error_model', ax=ax)
+            
+            # Add reference lines for effect size thresholds
+            ax.axhline(0.2, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+            ax.axhline(0.5, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+            ax.axhline(0.8, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+            ax.axhline(-0.2, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+            ax.axhline(-0.5, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+            ax.axhline(-0.8, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+            ax.axhline(0, color='black', linestyle='-', alpha=0.3, linewidth=1)
+            
+            metric_name = 'True Objective' if metric_suffix == 'true' else 'Observed Objective'
+            ax.set_title(f"Effect Size Distribution - {metric_name}")
+            ax.set_ylabel("Cohen's d")
+            ax.set_xlabel("Acquisition Strategy")
+            ax.tick_params(axis='x', rotation=45)
+            
+            plots_created = True
+        except Exception as e:
+            print(f"Failed to create distribution plot for {metric_suffix}: {e}")
+    
+    if plots_created:
         plt.tight_layout()
-        filename = f"final_outcome_pvalues_{error_model}_{oracle_model}_jit{jitter_iteration}.png"
-        plt.savefig(output_dir / filename, dpi=200)
-        plt.close()
-
-
+        plt.savefig(output_dir / "effect_sizes_distribution.png", dpi=200)
+        print("Saved distribution plot: effect_sizes_distribution.png")
+    else:
+        print("No distribution plots created - insufficient valid data")
+    
+    plt.close(fig)
+    
+    
 def plot_objectives(df: pd.DataFrame, output_dir: Path) -> None:
     group_cols = [
         "acquisition",
@@ -746,8 +897,9 @@ def main() -> None:
     plot_adjustments(args.input_dir, args.output_dir)
     plot_excess_adjustments(args.input_dir, args.output_dir)
     final_outcomes = summarize_final_outcomes(logs)
-    stats = evaluate_final_outcomes_improved(final_outcomes, args.output_dir)
-    plot_final_outcome_significance(stats, args.output_dir)
+    results_dict = evaluate_final_outcomes_improved(final_outcomes, args.output_dir)
+    plot_final_outcome_significance(results_dict, args.output_dir)
+    generate_statistical_report(results_dict, args.output_dir)
     print(f"Plots saved to: {args.output_dir}")
 
 
