@@ -55,9 +55,13 @@ def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -
     baseline = final_df[final_df["baseline"]].copy()
     jittered = final_df[~final_df["baseline"]].copy()
     
+    merge_keys = ["objective", "acquisition", "seed", "oracle_model"]
+    if "dataset" in final_df.columns:
+        merge_keys.insert(0, "dataset")
+
     merged = jittered.merge(
-        baseline[["objective", "acquisition", "seed", "oracle_model", "objective_true", "objective_observed"]],
-        on=["objective", "acquisition", "seed", "oracle_model"],
+        baseline[merge_keys + ["objective_true", "objective_observed"]],
+        on=merge_keys,
         how="inner",
         suffixes=("_jitter", "_baseline"),
     )
@@ -85,6 +89,7 @@ def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -
         
         # Check which factors have multiple levels
         factors = {
+            'dataset': merged['dataset'].nunique() if 'dataset' in merged.columns else 1,
             'objective': merged['objective'].nunique(),
             'acquisition': merged['acquisition'].nunique(),
             'error_model': merged['error_model'].nunique(),
