@@ -87,6 +87,8 @@ DATA_DIR = SCRIPT_DIR.parent / "eHMI-bo-participantdata"
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
+DEFAULT_DATASET_NAME = "default"
+
 PARAM_COLUMNS = [
     "verticalPosition",
     "verticalWidth",
@@ -163,6 +165,7 @@ class SimulationConfig:
     candidate_pool: int
     objective: str
     objective_columns: list[str]
+    param_columns: list[str]
     seed: int
     error_model: str
     error_bias: float
@@ -181,6 +184,15 @@ class SimulationConfig:
 
     # Multi-objective settings
     ref_point: np.ndarray | None
+
+
+@dataclasses.dataclass
+class DatasetConfig:
+    name: str
+    data_dirs: list[Path]
+    param_columns: list[str]
+    objective_map: dict[str, list[str]]
+    observation_glob: str = "ObservationsPerEvaluation.csv"
 
 
 @dataclasses.dataclass
@@ -221,7 +233,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--initial-samples", type=int, default=5)
     parser.add_argument("--candidate-pool", type=int, default=1000)  # kept for compatibility
 
-    parser.add_argument("--objective", type=str, default=None, choices=OBJECTIVE_MAP)
+    parser.add_argument("--objective", type=str, default=None)
     parser.add_argument("--objectives", type=str, default=None)
 
     parser.add_argument("--acq", type=str, default="all", choices=ACQUISITION_CHOICES + ["all"])
@@ -233,6 +245,18 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--output-dir", type=Path, default=Path("output"))
     parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
+    parser.add_argument(
+        "--dataset-config",
+        type=Path,
+        default=None,
+        help="Path to a JSON file describing one or more datasets to load.",
+    )
+    parser.add_argument(
+        "--combine-datasets",
+        action="store_true",
+        default=False,
+        help="Add a combined dataset when multiple datasets share objective/parameter columns.",
+    )
 
     parser.add_argument("--baseline-run", action="store_true", default=True)
     parser.add_argument("--no-baseline-run", action="store_false", dest="baseline_run")
@@ -298,19 +322,22 @@ def ensure_output_dir(path: Path) -> Path:
 
 
 def load_observations(
-    data_dir: Path,
+    dataset: DatasetConfig,
     objective: str,
     user_id: str | None = None,
     group_id: str | None = None,
 ) -> pd.DataFrame:
-    files = list(data_dir.rglob("ObservationsPerEvaluation.csv"))
+    files: list[Path] = []
+    for data_dir in dataset.data_dirs:
+        files.extend(list(data_dir.rglob(dataset.observation_glob)))
     if not files:
-        raise FileNotFoundError(f"No observation files found in {data_dir}")
+        dirs = ", ".join(str(path) for path in dataset.data_dirs)
+        raise FileNotFoundError(f"No observation files found in {dirs} using {dataset.observation_glob}")
 
     frames = [pd.read_csv(path, sep=";") for path in files]
     df = pd.concat(frames, ignore_index=True)
 
-    for column in PARAM_COLUMNS + OBJECTIVE_MAP[objective] + ["User_ID", "Group_ID"]:
+    for column in dataset.param_columns + dataset.objective_map[objective] + ["User_ID", "Group_ID"]:
         df[column] = pd.to_numeric(df[column], errors="coerce")
 
     if user_id is not None:
@@ -318,7 +345,7 @@ def load_observations(
     if group_id is not None:
         df = df[df["Group_ID"] == float(group_id)]
 
-    df = df.dropna(subset=PARAM_COLUMNS + OBJECTIVE_MAP[objective])
+    df = df.dropna(subset=dataset.param_columns + dataset.objective_map[objective])
     if df.empty:
         raise ValueError("No data remaining after applying user/group filters.")
     return df.reset_index(drop=True)
@@ -326,13 +353,11 @@ def load_observations(
 
 def compute_objective(
     df: pd.DataFrame,
-    objective: str,
+    objective_columns: list[str],
     normalize: bool,
     weights: np.ndarray | None,
 ) -> pd.Series:
-    if objective == "multi_objective":
-        raise ValueError("compute_objective called for multi_objective; use compute_objective_matrix.")
-    cols = OBJECTIVE_MAP[objective]
+    cols = objective_columns
     values = df[cols].to_numpy(dtype=float)
 
     if normalize:
@@ -351,12 +376,10 @@ def compute_objective(
 
 def compute_objective_matrix(
     df: pd.DataFrame,
-    objective: str,
+    objective_columns: list[str],
     normalize: bool,
 ) -> np.ndarray:
-    if objective != "multi_objective":
-        raise ValueError("compute_objective_matrix is only for multi_objective.")
-    cols = OBJECTIVE_MAP[objective]
+    cols = objective_columns
     values = df[cols].to_numpy(dtype=float)
 
     if normalize:
@@ -368,13 +391,17 @@ def compute_objective_matrix(
     return values
 
 
-def parse_objective_weights(weights_arg: str | None, objective: str) -> np.ndarray | None:
+def parse_objective_weights(
+    weights_arg: str | None,
+    objective: str,
+    objective_columns: list[str],
+) -> np.ndarray | None:
     if weights_arg is None:
         return None
     if objective == "multi_objective":
         raise ValueError("Objective weights are not supported for multi_objective.")
     values = [float(v.strip()) for v in weights_arg.split(",") if v.strip()]
-    expected = len(OBJECTIVE_MAP[objective])
+    expected = len(objective_columns)
     if len(values) != expected:
         raise ValueError(f"Expected {expected} weights for objective={objective}, got {len(values)}.")
     return np.array(values, dtype=float)
@@ -408,6 +435,8 @@ def augment_oracle_data(
 def build_oracle(
     df: pd.DataFrame,
     objective: str,
+    objective_columns: list[str],
+    param_columns: list[str],
     seed: int,
     normalize: bool,
     weights: np.ndarray | None,
@@ -417,7 +446,7 @@ def build_oracle(
     oracle_augment_std: float,
     oracle_fast: bool,
 ) -> OracleModel:
-    X = df[PARAM_COLUMNS].to_numpy(dtype=float)
+    X = df[param_columns].to_numpy(dtype=float)
     rng = np.random.default_rng(seed)
 
     if oracle_fast:
@@ -426,7 +455,7 @@ def build_oracle(
         tree_scale = 1.0
 
     if objective == "multi_objective":
-        Y = compute_objective_matrix(df, objective, normalize)
+        Y = compute_objective_matrix(df, objective_columns, normalize)
         X_aug, Y_aug = augment_oracle_data(
             X,
             Y,
@@ -436,7 +465,7 @@ def build_oracle(
             oracle_augment_std,
         )
         models = []
-        for idx, target in enumerate(OBJECTIVE_MAP[objective]):
+        for idx, target in enumerate(objective_columns):
             y = Y_aug[:, idx]
             models.append(
                 _build_oracle_model(
@@ -453,9 +482,9 @@ def build_oracle(
             print(f"  R² score: {train_score:.4f}")
             print(f"  RMSE: {train_rmse:.4f}")
 
-        return OracleModel(model=models, objective_name=objective, objective_columns=OBJECTIVE_MAP[objective])
+        return OracleModel(model=models, objective_name=objective, objective_columns=objective_columns)
 
-    y = compute_objective(df, objective, normalize, weights).to_numpy(dtype=float)
+    y = compute_objective(df, objective_columns, normalize, weights).to_numpy(dtype=float)
     X_aug, y_aug = augment_oracle_data(
         X,
         y,
@@ -481,7 +510,7 @@ def build_oracle(
     print(f"  R² score: {train_score:.4f}")
     print(f"  RMSE: {train_rmse:.4f}")
 
-    return OracleModel(model=model, objective_name=objective, objective_columns=OBJECTIVE_MAP[objective])
+    return OracleModel(model=model, objective_name=objective, objective_columns=objective_columns)
 
 
 def _build_oracle_model(oracle_model: str, seed: int, tree_scale: float) -> object:
@@ -536,9 +565,9 @@ def _build_oracle_model(oracle_model: str, seed: int, tree_scale: float) -> obje
     raise ValueError(f"Unknown oracle model: {oracle_model}")
 
 
-def bounds_from_data(df: pd.DataFrame) -> Bounds:
-    low = df[PARAM_COLUMNS].min().to_numpy(dtype=float)
-    high = df[PARAM_COLUMNS].max().to_numpy(dtype=float)
+def bounds_from_data(df: pd.DataFrame, param_columns: list[str]) -> Bounds:
+    low = df[param_columns].min().to_numpy(dtype=float)
+    high = df[param_columns].max().to_numpy(dtype=float)
     return Bounds(low=low, high=high)
 
 
@@ -665,18 +694,124 @@ def parse_oracle_models(oracle_model: str, oracle_models: str | None) -> list[st
     return values
 
 
-def parse_objective_list(objective_arg: str | None, objectives: str | None) -> list[str]:
+def parse_dataset_configs(data_dir: Path, dataset_config_path: Path | None) -> list[DatasetConfig]:
+    if dataset_config_path is None:
+        return [
+            DatasetConfig(
+                name=DEFAULT_DATASET_NAME,
+                data_dirs=[data_dir],
+                param_columns=list(PARAM_COLUMNS),
+                objective_map={k: list(v) for k, v in OBJECTIVE_MAP.items()},
+                observation_glob="ObservationsPerEvaluation.csv",
+            )
+        ]
+
+    payload = json.loads(dataset_config_path.read_text())
+    if isinstance(payload, dict) and "datasets" in payload:
+        dataset_payloads = payload["datasets"]
+    elif isinstance(payload, list):
+        dataset_payloads = payload
+    else:
+        raise ValueError("Dataset config must be a list or a dict with a 'datasets' key.")
+
+    datasets: list[DatasetConfig] = []
+    for idx, entry in enumerate(dataset_payloads, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError("Each dataset entry must be a JSON object.")
+        name = entry.get("name") or f"dataset_{idx}"
+        data_dirs = entry.get("data_dirs")
+        data_dir = entry.get("data_dir")
+        if data_dirs is None:
+            if data_dir is None:
+                raise ValueError(f"Dataset '{name}' must define 'data_dir' or 'data_dirs'.")
+            data_dirs = [data_dir]
+        if not isinstance(data_dirs, list):
+            data_dirs = [data_dirs]
+        param_columns = entry.get("param_columns", PARAM_COLUMNS)
+        objective_map = entry.get("objective_map", OBJECTIVE_MAP)
+        observation_glob = entry.get("observation_glob", "ObservationsPerEvaluation.csv")
+
+        if not isinstance(objective_map, dict):
+            raise ValueError(f"Dataset '{name}' objective_map must be a dict.")
+        cleaned_objective_map: dict[str, list[str]] = {}
+        for key, value in objective_map.items():
+            if not isinstance(value, list):
+                raise ValueError(f"Objective '{key}' for dataset '{name}' must be a list of columns.")
+            cleaned_objective_map[str(key)] = [str(col) for col in value]
+
+        datasets.append(
+            DatasetConfig(
+                name=str(name),
+                data_dirs=[Path(path) for path in data_dirs],
+                param_columns=[str(col) for col in param_columns],
+                objective_map=cleaned_objective_map,
+                observation_glob=str(observation_glob),
+            )
+        )
+
+    dataset_names = [dataset.name for dataset in datasets]
+    if len(set(dataset_names)) != len(dataset_names):
+        raise ValueError("Dataset names must be unique.")
+    return datasets
+
+
+def combine_dataset_configs(datasets: list[DatasetConfig], name: str = "combined") -> DatasetConfig | None:
+    if len(datasets) < 2:
+        return None
+    first = datasets[0]
+    if any(dataset.param_columns != first.param_columns for dataset in datasets[1:]):
+        warnings.warn("Cannot combine datasets with different parameter columns.")
+        return None
+    if any(dataset.observation_glob != first.observation_glob for dataset in datasets[1:]):
+        warnings.warn("Cannot combine datasets with different observation_glob patterns.")
+        return None
+
+    common_objectives = set(first.objective_map.keys())
+    for dataset in datasets[1:]:
+        common_objectives &= set(dataset.objective_map.keys())
+
+    objective_map: dict[str, list[str]] = {}
+    for objective in sorted(common_objectives):
+        columns = first.objective_map[objective]
+        if all(dataset.objective_map[objective] == columns for dataset in datasets[1:]):
+            objective_map[objective] = columns
+
+    if not objective_map:
+        warnings.warn("No common objectives found to build a combined dataset.")
+        return None
+
+    combined_dirs: list[Path] = []
+    for dataset in datasets:
+        combined_dirs.extend(dataset.data_dirs)
+
+    return DatasetConfig(
+        name=name,
+        data_dirs=combined_dirs,
+        param_columns=first.param_columns,
+        objective_map=objective_map,
+        observation_glob=first.observation_glob,
+    )
+
+
+def parse_objective_list(
+    objective_arg: str | None,
+    objectives: str | None,
+    objective_map: dict[str, list[str]],
+) -> list[str]:
     if objectives is None and objective_arg is None:
-        return ["composite", "multi_objective"]
+        defaults = [name for name in ["composite", "multi_objective"] if name in objective_map]
+        return defaults or list(objective_map.keys())
     raw = objectives or objective_arg
     if raw is None:
-        return ["composite", "multi_objective"]
+        defaults = [name for name in ["composite", "multi_objective"] if name in objective_map]
+        return defaults or list(objective_map.keys())
     if raw == "all":
-        return list(OBJECTIVE_MAP.keys())
+        return list(objective_map.keys())
     values = [v.strip() for v in raw.split(",") if v.strip()]
     if not values:
-        return ["composite", "multi_objective"]
-    unknown = [v for v in values if v not in OBJECTIVE_MAP]
+        defaults = [name for name in ["composite", "multi_objective"] if name in objective_map]
+        return defaults or list(objective_map.keys())
+    unknown = [v for v in values if v not in objective_map]
     if unknown:
         raise ValueError(f"Unknown objective(s): {', '.join(unknown)}")
     return values
@@ -724,10 +859,14 @@ def validate_inputs(args: argparse.Namespace) -> None:
         raise ValueError("oracle-augment-std must be >= 0.")
 
 
-def compute_reference_point(df: pd.DataFrame, objective: str) -> np.ndarray | None:
+def compute_reference_point(
+    df: pd.DataFrame,
+    objective: str,
+    objective_columns: list[str],
+) -> np.ndarray | None:
     if objective != "multi_objective":
         return None
-    values = df[OBJECTIVE_MAP[objective]].to_numpy(dtype=float)
+    values = df[objective_columns].to_numpy(dtype=float)
     min_vals = np.nanmin(values, axis=0)
     max_vals = np.nanmax(values, axis=0)
     ranges = np.where(max_vals - min_vals == 0, 1.0, max_vals - min_vals)
@@ -736,18 +875,26 @@ def compute_reference_point(df: pd.DataFrame, objective: str) -> np.ndarray | No
 
 def write_run_config(
     output_dir: Path,
-    objectives: list[str],
+    dataset_configs: list[DatasetConfig],
+    objectives: dict[str, list[str]],
     acquisition_names: list[str],
     error_models: list[str],
     oracle_models: list[str],
     seeds: list[int],
     args: argparse.Namespace,
 ) -> None:
+    dataset_lines = ["Datasets:"]
+    for dataset in dataset_configs:
+        dataset_lines.append(f"  - {dataset.name}: {', '.join(str(p) for p in dataset.data_dirs)}")
+
     lines = [
         "Sensor-error simulation configuration",
         "=" * 60,
         "",
-        f"Objectives: {', '.join(objectives)}",
+        *dataset_lines,
+        "",
+        "Objectives by dataset:",
+        *[f"  {name}: {', '.join(values)}" for name, values in objectives.items()],
         f"Acquisitions: {', '.join(acquisition_names)}",
         f"Error models: {', '.join(error_models)}",
         f"Oracle models: {', '.join(oracle_models)}",
@@ -1070,7 +1217,7 @@ def run_simulation(
                 previous_observed=previous_observed,
             )
         else:
-            observed_value, error_magnitude = true_value, 0.0
+            observed_value, error_magnitude = true_value, np.zeros_like(true_value, dtype=float)
 
         X_list.append(candidate_np)
         y_true_list.append(true_value)
@@ -1105,7 +1252,7 @@ def run_simulation(
         regret_cum_list.append(cum_regret)
         simple_regret_list.append(s_t)
 
-    results = pd.DataFrame(X_list, columns=PARAM_COLUMNS)
+    results = pd.DataFrame(X_list, columns=config.param_columns)
     results.insert(0, "iteration", np.arange(1, config.iterations + 1))
 
     results["objective_true"] = objective_true_scalar
@@ -1149,17 +1296,21 @@ def run_simulation(
     return results
 
 
-def summarize_adjustment(results: pd.DataFrame, jitter_iteration: int) -> pd.Series:
+def summarize_adjustment(
+    results: pd.DataFrame,
+    jitter_iteration: int,
+    param_columns: list[str],
+) -> pd.Series:
     max_iter = int(results["iteration"].max())
     if jitter_iteration < 1 or jitter_iteration >= max_iter:
         raise ValueError("jitter_iteration must be within [1, max_iteration - 1].")
 
-    current = results.loc[results["iteration"] == jitter_iteration, PARAM_COLUMNS].iloc[0]
-    nxt = results.loc[results["iteration"] == jitter_iteration + 1, PARAM_COLUMNS].iloc[0]
+    current = results.loc[results["iteration"] == jitter_iteration, param_columns].iloc[0]
+    nxt = results.loc[results["iteration"] == jitter_iteration + 1, param_columns].iloc[0]
     delta = nxt - current
     l2_norm = float(np.linalg.norm(delta.to_numpy()))
 
-    summary = {f"delta_{col}": float(delta[col]) for col in PARAM_COLUMNS}
+    summary = {f"delta_{col}": float(delta[col]) for col in param_columns}
     summary["delta_l2_norm"] = l2_norm
     summary["iteration"] = jitter_iteration
 
@@ -1176,6 +1327,7 @@ def summarize_adjustment(results: pd.DataFrame, jitter_iteration: int) -> pd.Ser
 
 def run_single_seed(
     seed: int,
+    dataset: DatasetConfig,
     objective: str,
     oracle_models: list[str],
     acquisitions: list[AcquisitionConfig],
@@ -1209,9 +1361,12 @@ def run_single_seed(
                 pass
 
     for oracle_model in oracle_models:
+        objective_columns = dataset.objective_map[objective]
         oracle = build_oracle(
             df=df,
             objective=objective,
+            objective_columns=objective_columns,
+            param_columns=dataset.param_columns,
             seed=seed,  # use the actual seed for this run
             normalize=args.normalize_objective,
             weights=weights,
@@ -1250,7 +1405,8 @@ def run_single_seed(
             initial_samples=args.initial_samples,
             candidate_pool=args.candidate_pool,
             objective=objective,
-            objective_columns=OBJECTIVE_MAP[objective],
+            objective_columns=objective_columns,
+            param_columns=dataset.param_columns,
             seed=seed,
             error_model=args.error_model,
             error_bias=args.error_bias,
@@ -1288,15 +1444,20 @@ def run_single_seed(
                     oracle_model=oracle_model,
                     y_opt=y_opt,
                 )
+                baseline_results["dataset"] = dataset.name
                 baseline_runtime = time.perf_counter() - run_start
 
                 results_path = args.output_dir / (
-                    f"bo_sensor_error_{objective}_{acq.name}_seed{seed}_baseline_{oracle_model}.csv"
+                    f"bo_sensor_error_{dataset.name}_{objective}_{acq.name}_seed{seed}_baseline_{oracle_model}.csv"
                 )
                 baseline_results.to_csv(results_path, index=False)
 
                 for jitter_iteration in jitter_iterations:
-                    summary = summarize_adjustment(baseline_results, jitter_iteration)
+                    summary = summarize_adjustment(
+                        baseline_results,
+                        jitter_iteration,
+                        dataset.param_columns,
+                    )
                     summary["acquisition"] = acq.name
                     summary["objective"] = objective
                     summary["jitter_std"] = float(baseline_results["jitter_std"].iloc[0])
@@ -1311,6 +1472,8 @@ def run_single_seed(
                     summary["kappa"] = float(acq.kappa)
                     summary["runtime_sec"] = float(baseline_runtime)
                     summary["y_opt"] = float(y_opt)
+                    summary["dataset"] = dataset.name
+                    summary["param_columns"] = ",".join(dataset.param_columns)
                     summaries.append(summary)
 
                 _tick()
@@ -1355,15 +1518,20 @@ def run_single_seed(
                             oracle_model=oracle_model,
                             y_opt=y_opt,
                         )
+                        results["dataset"] = dataset.name
                         run_runtime = time.perf_counter() - run_start
 
                         results_path = args.output_dir / (
-                            f"bo_sensor_error_{objective}_{acq.name}_seed{seed}_jittered_{oracle_model}_"
-                            f"{error_model}_jit{jitter_iteration}_std{jitter_std}.csv"
+                            f"bo_sensor_error_{dataset.name}_{objective}_{acq.name}_seed{seed}_jittered_"
+                            f"{oracle_model}_{error_model}_jit{jitter_iteration}_std{jitter_std}.csv"
                         )
                         results.to_csv(results_path, index=False)
 
-                        summary = summarize_adjustment(results, int(jitter_iteration))
+                        summary = summarize_adjustment(
+                            results,
+                            int(jitter_iteration),
+                            dataset.param_columns,
+                        )
                         summary["acquisition"] = acq.name
                         summary["objective"] = objective
                         summary["jitter_std"] = float(results["jitter_std"].iloc[0])
@@ -1378,6 +1546,8 @@ def run_single_seed(
                         summary["kappa"] = float(acq.kappa)
                         summary["runtime_sec"] = float(run_runtime)
                         summary["y_opt"] = float(y_opt)
+                        summary["dataset"] = dataset.name
+                        summary["param_columns"] = ",".join(dataset.param_columns)
                         summaries.append(summary)
 
                         _tick()
@@ -1390,8 +1560,6 @@ def main() -> None:
     args = parse_args()
     validate_inputs(args)
 
-    objective_names = parse_objective_list(args.objective, args.objectives)
-
     error_models = parse_error_models(args.error_model, args.error_models)
     jitter_stds = parse_float_list(args.jitter_stds, args.jitter_std)
     jitter_iterations = parse_int_list(args.jitter_iterations, args.jitter_iteration)
@@ -1401,6 +1569,12 @@ def main() -> None:
     seeds = parse_seed_list(args.seeds, args.seed, args.num_seeds)
 
     acquisition_names = parse_acquisition_list(args.acq, args.acq_list)
+
+    dataset_configs = parse_dataset_configs(args.data_dir, args.dataset_config)
+    if args.combine_datasets:
+        combined = combine_dataset_configs(dataset_configs)
+        if combined is not None:
+            dataset_configs.append(combined)
 
     output_dir = ensure_output_dir(args.output_dir)
     runtime_start = time.perf_counter()
@@ -1414,7 +1588,16 @@ def main() -> None:
         * len(jitter_stds)
         * len(jitter_iterations)
     )
-    total_runs = (baseline_runs_per_objective + jittered_runs_per_objective) * len(objective_names)
+    dataset_objectives: dict[str, list[str]] = {}
+    total_runs = 0
+    for dataset in dataset_configs:
+        objective_names = parse_objective_list(
+            args.objective,
+            args.objectives,
+            dataset.objective_map,
+        )
+        dataset_objectives[dataset.name] = objective_names
+        total_runs += (baseline_runs_per_objective + jittered_runs_per_objective) * len(objective_names)
 
     use_parallel = args.parallel or (len(seeds) > 1 and not args.parallel)
 
@@ -1440,40 +1623,94 @@ def main() -> None:
 
     progress = tqdm(total=total_runs, desc="Simulation runs", unit="run")
 
-    for objective_name in objective_names:
-        weights = parse_objective_weights(args.objective_weights, objective_name) if objective_name != "multi_objective" else None
-        df = load_observations(args.data_dir, objective_name, args.user_id, args.group_id)
-        bounds = bounds_from_data(df)
-        ref_point = compute_reference_point(df, objective_name)
+    for dataset in dataset_configs:
+        objective_names = dataset_objectives[dataset.name]
+        for objective_name in objective_names:
+            objective_columns = dataset.objective_map[objective_name]
+            weights = (
+                parse_objective_weights(args.objective_weights, objective_name, objective_columns)
+                if objective_name != "multi_objective"
+                else None
+            )
+            df = load_observations(dataset, objective_name, args.user_id, args.group_id)
+            bounds = bounds_from_data(df, dataset.param_columns)
+            ref_point = compute_reference_point(df, objective_name, objective_columns)
 
-        filtered_acq_names = filter_acquisitions_for_objective(acquisition_names, objective_name)
-        acquisitions = [
-            AcquisitionConfig(name=n, xi=args.xi, kappa=args.kappa) for n in filtered_acq_names
-        ]
+            filtered_acq_names = filter_acquisitions_for_objective(acquisition_names, objective_name)
+            acquisitions = [
+                AcquisitionConfig(name=n, xi=args.xi, kappa=args.kappa) for n in filtered_acq_names
+            ]
 
-        if use_parallel and len(seeds) > 1:
-            manager = mp.Manager()
-            progress_q = manager.Queue()
+            if use_parallel and len(seeds) > 1:
+                manager = mp.Manager()
+                progress_q = manager.Queue()
 
-            def _progress_monitor(q, pbar):
-                while True:
-                    msg = q.get()
-                    if msg is None:
-                        break
+                def _progress_monitor(q, pbar):
+                    while True:
+                        msg = q.get()
+                        if msg is None:
+                            break
+                        try:
+                            pbar.update(int(msg))
+                        except Exception:
+                            pass
+
+                monitor = threading.Thread(target=_progress_monitor, args=(progress_q, progress), daemon=True)
+                monitor.start()
+
+                try:
+                    with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                        futures = {
+                            executor.submit(
+                                run_single_seed,
+                                seed,
+                                dataset,
+                                objective_name,
+                                oracle_models,
+                                acquisitions,
+                                error_models,
+                                jitter_stds,
+                                jitter_iterations,
+                                df,
+                                bounds,
+                                args,
+                                weights,
+                                ref_point,
+                                progress_q,
+                                None,
+                            ): seed
+                            for seed in seeds
+                        }
+
+                        for future in as_completed(futures):
+                            seed = futures[future]
+                            try:
+                                seed_summaries, _ = future.result()
+                                summaries.extend(seed_summaries)
+                            except Exception as e:
+                                print(f"\nError processing seed {seed}: {e}")
+                                import traceback
+                                traceback.print_exc()
+                finally:
                     try:
-                        pbar.update(int(msg))
+                        progress_q.put(None)
+                    except Exception:
+                        pass
+                    try:
+                        monitor.join(timeout=10)
+                    except Exception:
+                        pass
+                    try:
+                        manager.shutdown()
                     except Exception:
                         pass
 
-            monitor = threading.Thread(target=_progress_monitor, args=(progress_q, progress), daemon=True)
-            monitor.start()
-
-            try:
-                with ProcessPoolExecutor(max_workers=n_jobs) as executor:
-                    futures = {
-                        executor.submit(
-                            run_single_seed,
+            else:
+                try:
+                    for seed in seeds:
+                        seed_summaries, _ = run_single_seed(
                             seed,
+                            dataset,
                             objective_name,
                             oracle_models,
                             acquisitions,
@@ -1485,57 +1722,12 @@ def main() -> None:
                             args,
                             weights,
                             ref_point,
-                            progress_q,
-                            None,
-                        ): seed
-                        for seed in seeds
-                    }
-
-                    for future in as_completed(futures):
-                        seed = futures[future]
-                        try:
-                            seed_summaries, _ = future.result()
-                            summaries.extend(seed_summaries)
-                        except Exception as e:
-                            print(f"\nError processing seed {seed}: {e}")
-                            import traceback
-                            traceback.print_exc()
-            finally:
-                try:
-                    progress_q.put(None)
-                except Exception:
+                            progress_q=None,
+                            progress_update=progress.update,
+                        )
+                        summaries.extend(seed_summaries)
+                finally:
                     pass
-                try:
-                    monitor.join(timeout=10)
-                except Exception:
-                    pass
-                try:
-                    manager.shutdown()
-                except Exception:
-                    pass
-
-        else:
-            try:
-                for seed in seeds:
-                    seed_summaries, _ = run_single_seed(
-                        seed,
-                        objective_name,
-                        oracle_models,
-                        acquisitions,
-                        error_models,
-                        jitter_stds,
-                        jitter_iterations,
-                        df,
-                        bounds,
-                        args,
-                        weights,
-                        ref_point,
-                        progress_q=None,
-                        progress_update=progress.update,
-                    )
-                    summaries.extend(seed_summaries)
-            finally:
-                pass
 
     progress.close()
 
@@ -1553,43 +1745,112 @@ def main() -> None:
 
         merged = jittered.merge(
             baseline,
-            on=["acquisition", "objective", "iterations", "jitter_iteration", "seed", "oracle_model", "xi", "kappa"],
+            on=[
+                "dataset",
+                "acquisition",
+                "objective",
+                "iterations",
+                "jitter_iteration",
+                "seed",
+                "oracle_model",
+                "xi",
+                "kappa",
+                "param_columns",
+            ],
             suffixes=("_jitter", "_baseline"),
         )
 
-        excess = {}
-        for col in PARAM_COLUMNS:
-            excess[f"delta_excess_{col}"] = merged[f"delta_{col}_jitter"] - merged[f"delta_{col}_baseline"]
+        excess_rows: list[pd.Series] = []
+        for _, row in merged.iterrows():
+            param_columns = row["param_columns"].split(",")
+            excess_entry = {
+                "dataset": row["dataset"],
+                "objective": row["objective"],
+                "acquisition": row["acquisition"],
+                "oracle_model": row["oracle_model"],
+                "error_model": row["error_model_jitter"],
+                "jitter_std": row["jitter_std_jitter"],
+                "jitter_iteration": row["jitter_iteration"],
+                "seed": row["seed"],
+                "param_columns": row["param_columns"],
+            }
+            for col in param_columns:
+                excess_entry[f"delta_excess_{col}"] = (
+                    row[f"delta_{col}_jitter"] - row[f"delta_{col}_baseline"]
+                )
+            excess_values = np.array(
+                [excess_entry[f"delta_excess_{col}"] for col in param_columns],
+                dtype=float,
+            )
+            excess_entry["delta_excess_l2_norm"] = float(np.linalg.norm(excess_values))
+            excess_entry["final_simple_regret_excess_true"] = (
+                row["final_simple_regret_true_jitter"] - row["final_simple_regret_true_baseline"]
+            )
+            excess_entry["final_cum_regret_excess_true"] = (
+                row["final_cum_regret_true_jitter"] - row["final_cum_regret_true_baseline"]
+            )
+            excess_entry["auc_simple_regret_excess_true"] = (
+                row["auc_simple_regret_true_jitter"] - row["auc_simple_regret_true_baseline"]
+            )
+            excess_rows.append(pd.Series(excess_entry))
 
-        merged_excess = pd.DataFrame(excess)
-        merged_excess["delta_excess_l2_norm"] = np.linalg.norm(
-            merged_excess[[f"delta_excess_{col}" for col in PARAM_COLUMNS]].to_numpy(dtype=float),
-            axis=1,
-        )
-        merged_excess["acquisition"] = merged["acquisition"]
-        merged_excess["seed"] = merged["seed"]
-        merged_excess["objective"] = merged["objective"]
-        merged_excess["oracle_model"] = merged["oracle_model"]
-        merged_excess["error_model"] = merged["error_model_jitter"]
-        merged_excess["jitter_std"] = merged["jitter_std_jitter"]
-        merged_excess["jitter_iteration"] = merged["jitter_iteration"]
-
-        merged_excess["final_simple_regret_excess_true"] = (
-            merged["final_simple_regret_true_jitter"] - merged["final_simple_regret_true_baseline"]
-        )
-        merged_excess["final_cum_regret_excess_true"] = (
-            merged["final_cum_regret_true_jitter"] - merged["final_cum_regret_true_baseline"]
-        )
-        merged_excess["auc_simple_regret_excess_true"] = (
-            merged["auc_simple_regret_true_jitter"] - merged["auc_simple_regret_true_baseline"]
-        )
+        merged_excess = pd.DataFrame(excess_rows)
 
         merged_excess_path = output_dir / "bo_sensor_error_excess_summary.csv"
         merged_excess.to_csv(merged_excess_path, index=False)
 
+        comparison_metrics = [
+            "delta_excess_l2_norm",
+            "final_simple_regret_excess_true",
+            "final_cum_regret_excess_true",
+            "auc_simple_regret_excess_true",
+        ]
+        dataset_stats = (
+            merged_excess.groupby(
+                [
+                    "dataset",
+                    "objective",
+                    "acquisition",
+                    "error_model",
+                    "jitter_iteration",
+                    "jitter_std",
+                    "oracle_model",
+                ]
+            )
+            .agg(
+                **{f"{metric}_mean": (metric, "mean") for metric in comparison_metrics},
+                **{f"{metric}_std": (metric, "std") for metric in comparison_metrics},
+                runs=("delta_excess_l2_norm", "count"),
+            )
+            .reset_index()
+        )
+        overall_stats = (
+            merged_excess.groupby(
+                [
+                    "objective",
+                    "acquisition",
+                    "error_model",
+                    "jitter_iteration",
+                    "jitter_std",
+                    "oracle_model",
+                ]
+            )
+            .agg(
+                **{f"{metric}_mean": (metric, "mean") for metric in comparison_metrics},
+                **{f"{metric}_std": (metric, "std") for metric in comparison_metrics},
+                runs=("delta_excess_l2_norm", "count"),
+            )
+            .reset_index()
+        )
+        overall_stats.insert(0, "dataset", "all")
+        dataset_comparison = pd.concat([dataset_stats, overall_stats], ignore_index=True)
+        dataset_comparison_path = output_dir / "bo_sensor_error_dataset_effects.csv"
+        dataset_comparison.to_csv(dataset_comparison_path, index=False)
+
     stats = (
         summary_df.groupby(
             [
+                "dataset",
                 "objective",
                 "acquisition",
                 "baseline",
@@ -1617,7 +1878,8 @@ def main() -> None:
 
     write_run_config(
         output_dir=output_dir,
-        objectives=objective_names,
+        dataset_configs=dataset_configs,
+        objectives=dataset_objectives,
         acquisition_names=acquisition_names,
         error_models=error_models,
         oracle_models=oracle_models,
@@ -1630,7 +1892,17 @@ def main() -> None:
         "runtime_sec": float(time.perf_counter() - runtime_start),
         "parallel_execution": bool(use_parallel and len(seeds) > 1),
         "n_workers": int(n_jobs) if (use_parallel and len(seeds) > 1) else 1,
-        "objectives": objective_names,
+        "datasets": [
+            {
+                "name": dataset.name,
+                "data_dirs": [str(path) for path in dataset.data_dirs],
+                "param_columns": dataset.param_columns,
+                "objective_map": dataset.objective_map,
+                "observation_glob": dataset.observation_glob,
+            }
+            for dataset in dataset_configs
+        ],
+        "objectives": dataset_objectives,
         "error_models": error_models,
         "oracle_models": oracle_models,
         "acquisitions": acquisition_names,

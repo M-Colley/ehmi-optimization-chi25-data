@@ -17,7 +17,7 @@ questions using the eHMI study data:
 
 ## What this simulation does
 
-1. Loads all `ObservationsPerEvaluation.csv` files from `../eHMI-bo-participantdata`.
+1. Loads all `ObservationsPerEvaluation.csv` files from one or more datasets.
 2. Trains **oracle models** to map the 9 eHMI parameters to a target objective
    (composite, single-objective, or multi-objective).
 3. Runs iterative BO with a **Gaussian Process** surrogate.
@@ -82,16 +82,18 @@ python scripts/bo_sensor_error_simulation.py --no-baseline-run
 
 ## Outputs
 
-- `bo_sensor_error_<objective>_<acq>_seed<seed>_baseline_<oracle_model>.csv`
+- `bo_sensor_error_<dataset>_<objective>_<acq>_seed<seed>_baseline_<oracle_model>.csv`
   - Full iteration log: parameter values, true objective, observed objective,
     `error_applied`, and `error_magnitude`.
-- `bo_sensor_error_<objective>_<acq>_seed<seed>_jittered_<oracle_model>_<error_model>_jit<iter>_std<std>.csv`
+- `bo_sensor_error_<dataset>_<objective>_<acq>_seed<seed>_jittered_<oracle_model>_<error_model>_jit<iter>_std<std>.csv`
 - `bo_sensor_error_summary.csv`
   - One row per acquisition function.
   - `delta_<param>`: change in each parameter from iteration *N* to *N+1*.
   - `delta_l2_norm`: L2 norm of the parameter change (overall adjustment magnitude).
 - `bo_sensor_error_excess_summary.csv`
   - Per-acquisition/seed **excess change** (jittered − baseline).
+- `bo_sensor_error_dataset_effects.csv`
+  - Per-dataset and cross-dataset mean/std for jitter excess metrics when baselines are enabled.
 - `bo_sensor_error_summary_stats.csv`
   - Mean/std summary by acquisition and baseline flag.
 - `final_outcome_significance.csv`
@@ -106,7 +108,7 @@ python scripts/bo_sensor_error_simulation.py --no-baseline-run
 
 **1) “Effects of sensor errors in implicit HITL optimization”**  
 Sensor error is simulated by adding Gaussian jitter to the feedback after
-`--jitter-iteration`. The per-iteration CSVs (`bo_sensor_error_<objective>_<acq>_seed<seed>_*.csv`)
+`--jitter-iteration`. The per-iteration CSVs (`bo_sensor_error_<dataset>_<objective>_<acq>_seed<seed>_*.csv`)
 contain both `objective_true` (oracle signal) and `objective_observed`
 jittered values. Comparing these columns after the jitter point shows how
 the optimization is driven by noisy feedback rather than the underlying
@@ -175,6 +177,54 @@ relative to the script location. If your data lives elsewhere, pass it explicitl
 python scripts/bo_sensor_error_simulation.py \
   --data-dir /path/to/eHMI-bo-participantdata
 ```
+
+### Multiple datasets and custom objectives
+
+To evaluate **multiple datasets** (including datasets with different objective
+columns), provide a JSON dataset config and optionally enable a combined dataset.
+
+```json
+[
+  {
+    "name": "ehmi",
+    "data_dir": "../eHMI-bo-participantdata",
+    "param_columns": ["verticalPosition", "verticalWidth", "horizontalWidth", "r", "g", "b", "a", "blinkFrequency", "volume"],
+    "objective_map": {
+      "composite": ["Trust", "Understanding", "PerceivedSafety", "Aesthetics", "Acceptance"],
+      "multi_objective": ["Trust", "Understanding", "PerceivedSafety", "Aesthetics", "Acceptance"],
+      "trust": ["Trust"],
+      "understanding": ["Understanding"],
+      "perceived_safety": ["PerceivedSafety"],
+      "aesthetics": ["Aesthetics"],
+      "acceptance": ["Acceptance"]
+    }
+  },
+  {
+    "name": "opticarvis",
+    "data_dir": "/path/to/opticarvis-data",
+    "param_columns": ["verticalPosition", "verticalWidth", "horizontalWidth", "r", "g", "b", "a", "blinkFrequency", "volume"],
+    "objective_map": {
+      "composite": ["Trust", "Understanding", "PerceivedSafety", "Aesthetics", "Acceptance"],
+      "multi_objective": ["Trust", "Understanding", "PerceivedSafety", "Aesthetics", "Acceptance"]
+    }
+  }
+]
+```
+
+Run with:
+
+```bash
+python scripts/bo_sensor_error_simulation.py \
+  --dataset-config datasets.json \
+  --combine-datasets \
+  --objective composite,multi_objective
+```
+
+Notes:
+* The dataset name becomes part of the per-iteration CSV filename and is also stored
+  in the `dataset` column of summary outputs.
+* `--combine-datasets` adds an extra dataset that concatenates the raw observations
+  only when **parameter columns** and **objective columns** match across datasets.
 
 ### Participant or group filtering
 

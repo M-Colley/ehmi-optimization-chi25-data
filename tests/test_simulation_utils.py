@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,7 @@ MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "bo_sensor_error
 
 spec = importlib.util.spec_from_file_location("bo_sim", MODULE_PATH)
 bo_sim = importlib.util.module_from_spec(spec)
+sys.modules["bo_sim"] = bo_sim
 assert spec.loader is not None
 spec.loader.exec_module(bo_sim)
 
@@ -26,7 +28,7 @@ def make_dummy_df(rows: int = 30) -> pd.DataFrame:
 
 
 def test_parse_objective_list_defaults_to_composite_and_multi() -> None:
-    objectives = bo_sim.parse_objective_list(None, None)
+    objectives = bo_sim.parse_objective_list(None, None, bo_sim.OBJECTIVE_MAP)
     assert objectives == ["composite", "multi_objective"]
 
 
@@ -45,7 +47,11 @@ def test_filter_acquisitions_for_objective() -> None:
 
 def test_compute_reference_point_multi_objective() -> None:
     df = make_dummy_df()
-    ref = bo_sim.compute_reference_point(df, "multi_objective")
+    ref = bo_sim.compute_reference_point(
+        df,
+        "multi_objective",
+        bo_sim.OBJECTIVE_MAP["multi_objective"],
+    )
     assert ref is not None
     assert ref.shape[0] == len(bo_sim.OBJECTIVE_MAP["multi_objective"])
 
@@ -60,6 +66,7 @@ def test_apply_sensor_error_vector_bias() -> None:
         candidate_pool=10,
         objective="composite",
         objective_columns=bo_sim.OBJECTIVE_MAP["composite"],
+        param_columns=bo_sim.PARAM_COLUMNS,
         seed=1,
         error_model="bias",
         error_bias=0.5,
@@ -88,6 +95,8 @@ def test_oracle_builders_for_key_models() -> None:
         oracle = bo_sim.build_oracle(
             df=df,
             objective="composite",
+            objective_columns=bo_sim.OBJECTIVE_MAP["composite"],
+            param_columns=bo_sim.PARAM_COLUMNS,
             seed=7,
             normalize=False,
             weights=None,
@@ -108,3 +117,63 @@ def test_augment_oracle_data_jitter() -> None:
     X_aug, y_aug = bo_sim.augment_oracle_data(X, y, rng, "jitter", repeats=2, noise_std=0.01)
     assert X_aug.shape[0] == 30
     assert y_aug.shape[0] == 30
+
+
+def test_parse_dataset_configs_from_json(tmp_path: Path) -> None:
+    config_path = tmp_path / "datasets.json"
+    config_path.write_text(
+        """
+        [
+          {
+            "name": "dataset_a",
+            "data_dir": "data/a",
+            "param_columns": ["p1", "p2"],
+            "objective_map": {"score": ["s1", "s2"]},
+            "observation_glob": "ObservationsPerEvaluation.csv"
+          }
+        ]
+        """
+    )
+    datasets = bo_sim.parse_dataset_configs(Path("default"), config_path)
+    assert len(datasets) == 1
+    assert datasets[0].name == "dataset_a"
+    assert datasets[0].param_columns == ["p1", "p2"]
+    assert datasets[0].objective_map["score"] == ["s1", "s2"]
+
+
+def test_combine_dataset_configs_intersection() -> None:
+    dataset_a = bo_sim.DatasetConfig(
+        name="a",
+        data_dirs=[Path("a")],
+        param_columns=["p1", "p2"],
+        objective_map={"score": ["s1"], "alt": ["a1"]},
+    )
+    dataset_b = bo_sim.DatasetConfig(
+        name="b",
+        data_dirs=[Path("b")],
+        param_columns=["p1", "p2"],
+        objective_map={"score": ["s1"], "other": ["o1"]},
+    )
+    combined = bo_sim.combine_dataset_configs([dataset_a, dataset_b], name="combined")
+    assert combined is not None
+    assert combined.objective_map == {"score": ["s1"]}
+
+
+def test_load_observations_multiple_dirs(tmp_path: Path) -> None:
+    data_dir_a = tmp_path / "data_a"
+    data_dir_b = tmp_path / "data_b"
+    data_dir_a.mkdir()
+    data_dir_b.mkdir()
+    columns = bo_sim.PARAM_COLUMNS + bo_sim.OBJECTIVE_MAP["composite"] + ["User_ID", "Group_ID"]
+    df = pd.DataFrame({col: [1.0, 2.0] for col in columns})
+    df.to_csv(data_dir_a / "ObservationsPerEvaluation.csv", sep=";", index=False)
+    df.to_csv(data_dir_b / "ObservationsPerEvaluation.csv", sep=";", index=False)
+
+    dataset = bo_sim.DatasetConfig(
+        name="multi",
+        data_dirs=[data_dir_a, data_dir_b],
+        param_columns=bo_sim.PARAM_COLUMNS,
+        objective_map=bo_sim.OBJECTIVE_MAP,
+    )
+    loaded = bo_sim.load_observations(dataset, "composite")
+    assert loaded.shape[0] == 4
