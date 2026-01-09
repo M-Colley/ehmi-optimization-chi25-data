@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 from scipy.stats import ttest_rel
+from scipy import stats
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 from statsmodels.formula.api import ols
 from statsmodels.stats.anova import anova_lm
@@ -55,8 +56,8 @@ def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -
     jittered = final_df[~final_df["baseline"]].copy()
     
     merged = jittered.merge(
-        baseline[["acquisition", "seed", "oracle_model", "objective_true", "objective_observed"]],
-        on=["acquisition", "seed", "oracle_model"],
+        baseline[["objective", "acquisition", "seed", "oracle_model", "objective_true", "objective_observed"]],
+        on=["objective", "acquisition", "seed", "oracle_model"],
         how="inner",
         suffixes=("_jitter", "_baseline"),
     )
@@ -84,6 +85,7 @@ def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -
         
         # Check which factors have multiple levels
         factors = {
+            'objective': merged['objective'].nunique(),
             'acquisition': merged['acquisition'].nunique(),
             'error_model': merged['error_model'].nunique(),
             'jitter_std': merged['jitter_std'].nunique(),
@@ -322,13 +324,14 @@ def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -
         return diff.mean() / (pooled_std + 1e-10)
     
     effect_sizes = []
-    for (acq, error_model, jitter_std, jitter_iter, oracle), group in merged.groupby(
-        ['acquisition', 'error_model', 'jitter_std', 'jitter_iteration', 'oracle_model']
+    for (objective, acq, error_model, jitter_std, jitter_iter, oracle), group in merged.groupby(
+        ['objective', 'acquisition', 'error_model', 'jitter_std', 'jitter_iteration', 'oracle_model']
     ):
         d_true = cohens_d(group['objective_true_jitter'], group['objective_true_baseline'])
         d_obs = cohens_d(group['objective_observed_jitter'], group['objective_observed_baseline'])
         
         effect_sizes.append({
+            'objective': objective,
             'acquisition': acq,
             'error_model': error_model,
             'jitter_std': jitter_std,
@@ -368,7 +371,7 @@ def evaluate_final_outcomes_improved(final_df: pd.DataFrame, output_dir: Path) -
     print("DESCRIPTIVE STATISTICS")
     print("="*80)
     
-    desc_stats = merged.groupby(['acquisition', 'error_model', 'jitter_std']).agg({
+    desc_stats = merged.groupby(['objective', 'acquisition', 'error_model', 'jitter_std']).agg({
         'true_diff': ['mean', 'std', 'sem', 'count'],
         'obs_diff': ['mean', 'std', 'sem', 'count'],
     }).round(4)
@@ -568,6 +571,7 @@ def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.Data
     merged = jittered.merge(
         baseline[
             [
+                "objective",
                 "acquisition",
                 "seed",
                 "oracle_model",
@@ -575,7 +579,7 @@ def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.Data
                 "objective_observed",
             ]
         ],
-        on=["acquisition", "seed", "oracle_model"],
+        on=["objective", "acquisition", "seed", "oracle_model"],
         how="inner",
         suffixes=("_jitter", "_baseline"),
     )
@@ -584,6 +588,7 @@ def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.Data
 
     rows = []
     group_cols = [
+        "objective",
         "acquisition",
         "error_model",
         "jitter_iteration",
@@ -591,7 +596,7 @@ def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.Data
         "oracle_model",
     ]
     for keys, group in merged.groupby(group_cols):
-        acquisition, error_model, jitter_iteration, jitter_std, oracle_model = keys
+        objective, acquisition, error_model, jitter_iteration, jitter_std, oracle_model = keys
         n_runs = len(group)
         mean_true_diff = float(
             (group["objective_true_jitter"] - group["objective_true_baseline"]).mean()
@@ -625,6 +630,7 @@ def evaluate_final_outcomes(final_df: pd.DataFrame, output_dir: Path) -> pd.Data
             obs_p = float(obs_test.pvalue)
         rows.append(
             {
+                "objective": objective,
                 "acquisition": acquisition,
                 "error_model": error_model,
                 "jitter_iteration": jitter_iteration,
@@ -691,108 +697,115 @@ def plot_final_outcome_significance(results: dict, output_dir: Path) -> None:
         if d_col not in stats.columns:
             print(f"Column {d_col} not found in stats")
             continue
-        
-        # Group by key factors
-        for (error_model, oracle_model), data in stats.groupby(['error_model', 'oracle_model']):
-            if len(data) < 2:
-                print(f"Insufficient data for {error_model}, {oracle_model} ({len(data)} rows)")
-                continue
-            
-            # Create pivot table for heatmap
-            pivot_data = data.pivot_table(
-                values=d_col,
-                index='acquisition',
-                columns='jitter_std',
-                aggfunc='mean'
-            )
-            
-            # Check if pivot_data is empty or all NaN
-            if pivot_data.empty or pivot_data.isna().all().all():
-                print(f"No valid data for heatmap: {error_model}, {oracle_model}, {metric_suffix}")
-                continue
-            
-            # Check if there's at least some non-NaN data
-            if pivot_data.notna().sum().sum() == 0:
-                print(f"All NaN values in pivot table: {error_model}, {oracle_model}, {metric_suffix}")
-                continue
-            
-            plt.figure(figsize=(12, 6))
-            
-            try:
-                sns.heatmap(
-                    pivot_data,
-                    annot=True,
-                    fmt='.3f',
-                    cmap='RdYlGn',
-                    center=0,
-                    cbar_kws={'label': "Cohen's d"},
-                    mask=pivot_data.isna()  # Mask NaN values
+
+        for objective, obj_data in stats.groupby('objective'):
+            # Group by key factors
+            for (error_model, oracle_model), data in obj_data.groupby(['error_model', 'oracle_model']):
+                if len(data) < 2:
+                    print(f"Insufficient data for {objective}, {error_model}, {oracle_model} ({len(data)} rows)")
+                    continue
+
+                # Create pivot table for heatmap
+                pivot_data = data.pivot_table(
+                    values=d_col,
+                    index='acquisition',
+                    columns='jitter_std',
+                    aggfunc='mean'
                 )
-                
-                metric_name = 'True Objective' if metric_suffix == 'true' else 'Observed Objective'
-                plt.title(f"Effect Sizes ({metric_name}) - {error_model}, {oracle_model}")
-                plt.ylabel("Acquisition Strategy")
-                plt.xlabel("Jitter Std")
-                plt.tight_layout()
-                
-                filename = f"effect_sizes_{metric_suffix}_{error_model}_{oracle_model}.png"
-                plt.savefig(output_dir / filename, dpi=200)
-                print(f"Saved heatmap: {filename}")
-            except Exception as e:
-                print(f"Failed to create heatmap for {error_model}, {oracle_model}, {metric_suffix}: {e}")
-            finally:
-                plt.close()
+
+                # Check if pivot_data is empty or all NaN
+                if pivot_data.empty or pivot_data.isna().all().all():
+                    print(f"No valid data for heatmap: {objective}, {error_model}, {oracle_model}, {metric_suffix}")
+                    continue
+
+                # Check if there's at least some non-NaN data
+                if pivot_data.notna().sum().sum() == 0:
+                    print(f"All NaN values in pivot table: {objective}, {error_model}, {oracle_model}, {metric_suffix}")
+                    continue
+
+                plt.figure(figsize=(12, 6))
+
+                try:
+                    sns.heatmap(
+                        pivot_data,
+                        annot=True,
+                        fmt='.3f',
+                        cmap='RdYlGn',
+                        center=0,
+                        cbar_kws={'label': "Cohen's d"},
+                        mask=pivot_data.isna()  # Mask NaN values
+                    )
+
+                    metric_name = 'True Objective' if metric_suffix == 'true' else 'Observed Objective'
+                    plt.title(f"Effect Sizes ({metric_name}) - {objective}, {error_model}, {oracle_model}")
+                    plt.ylabel("Acquisition Strategy")
+                    plt.xlabel("Jitter Std")
+                    plt.tight_layout()
+
+                    filename = f"effect_sizes_{metric_suffix}_{objective}_{error_model}_{oracle_model}.png"
+                    plt.savefig(output_dir / filename, dpi=200)
+                    print(f"Saved heatmap: {filename}")
+                except Exception as e:
+                    print(
+                        f"Failed to create heatmap for {objective}, {error_model}, {oracle_model}, "
+                        f"{metric_suffix}: {e}"
+                    )
+                finally:
+                    plt.close()
     
     # Plot 2: Effect size distributions
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
-    plots_created = False
-    for idx, (metric_suffix, ax) in enumerate(zip(['true', 'obs'], axes)):
-        d_col = f'cohens_d_{metric_suffix}'
-        if d_col not in stats.columns:
-            print(f"Column {d_col} not found for distribution plot")
-            continue
-        
-        # Check if we have valid data
-        valid_data = stats[stats[d_col].notna()]
-        if valid_data.empty:
-            print(f"No valid data for distribution plot: {metric_suffix}")
-            continue
-        
-        try:
-            sns.boxplot(data=valid_data, x='acquisition', y=d_col, hue='error_model', ax=ax)
-            
-            # Add reference lines for effect size thresholds
-            ax.axhline(0.2, color='gray', linestyle='--', alpha=0.5, linewidth=1)
-            ax.axhline(0.5, color='gray', linestyle='--', alpha=0.5, linewidth=1)
-            ax.axhline(0.8, color='gray', linestyle='--', alpha=0.5, linewidth=1)
-            ax.axhline(-0.2, color='gray', linestyle='--', alpha=0.5, linewidth=1)
-            ax.axhline(-0.5, color='gray', linestyle='--', alpha=0.5, linewidth=1)
-            ax.axhline(-0.8, color='gray', linestyle='--', alpha=0.5, linewidth=1)
-            ax.axhline(0, color='black', linestyle='-', alpha=0.3, linewidth=1)
-            
-            metric_name = 'True Objective' if metric_suffix == 'true' else 'Observed Objective'
-            ax.set_title(f"Effect Size Distribution - {metric_name}")
-            ax.set_ylabel("Cohen's d")
-            ax.set_xlabel("Acquisition Strategy")
-            ax.tick_params(axis='x', rotation=45)
-            
-            plots_created = True
-        except Exception as e:
-            print(f"Failed to create distribution plot for {metric_suffix}: {e}")
-    
-    if plots_created:
-        plt.tight_layout()
-        plt.savefig(output_dir / "effect_sizes_distribution.png", dpi=200)
-        print("Saved distribution plot: effect_sizes_distribution.png")
-    else:
-        print("No distribution plots created - insufficient valid data")
-    
-    plt.close(fig)
+    for objective, obj_data in stats.groupby('objective'):
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+        plots_created = False
+        for idx, (metric_suffix, ax) in enumerate(zip(['true', 'obs'], axes)):
+            d_col = f'cohens_d_{metric_suffix}'
+            if d_col not in obj_data.columns:
+                print(f"Column {d_col} not found for distribution plot")
+                continue
+
+            # Check if we have valid data
+            valid_data = obj_data[obj_data[d_col].notna()]
+            if valid_data.empty:
+                print(f"No valid data for distribution plot: {objective}, {metric_suffix}")
+                continue
+
+            try:
+                sns.boxplot(data=valid_data, x='acquisition', y=d_col, hue='error_model', ax=ax)
+
+                # Add reference lines for effect size thresholds
+                ax.axhline(0.2, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+                ax.axhline(0.5, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+                ax.axhline(0.8, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+                ax.axhline(-0.2, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+                ax.axhline(-0.5, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+                ax.axhline(-0.8, color='gray', linestyle='--', alpha=0.5, linewidth=1)
+                ax.axhline(0, color='black', linestyle='-', alpha=0.3, linewidth=1)
+
+                metric_name = 'True Objective' if metric_suffix == 'true' else 'Observed Objective'
+                ax.set_title(f"Effect Size Distribution - {objective} ({metric_name})")
+                ax.set_ylabel("Cohen's d")
+                ax.set_xlabel("Acquisition Strategy")
+                ax.tick_params(axis='x', rotation=45)
+
+                plots_created = True
+            except Exception as e:
+                print(f"Failed to create distribution plot for {objective}, {metric_suffix}: {e}")
+
+        if plots_created:
+            plt.tight_layout()
+            filename = f"effect_sizes_distribution_{objective}.png"
+            plt.savefig(output_dir / filename, dpi=200)
+            print(f"Saved distribution plot: {filename}")
+        else:
+            print(f"No distribution plots created - insufficient valid data for {objective}")
+
+        plt.close(fig)
     
     
 def plot_objectives(df: pd.DataFrame, output_dir: Path) -> None:
     group_cols = [
+        "objective",
         "acquisition",
         "error_model",
         "jitter_std",
@@ -803,22 +816,22 @@ def plot_objectives(df: pd.DataFrame, output_dir: Path) -> None:
     grouped = (
         df.groupby(group_cols)[["objective_true", "objective_observed"]].mean().reset_index()
     )
-    for (acq, error_model, jitter_std, jitter_iteration, oracle_model), data in grouped.groupby(
-        ["acquisition", "error_model", "jitter_std", "jitter_iteration", "oracle_model"]
+    for (objective, acq, error_model, jitter_std, jitter_iteration, oracle_model), data in grouped.groupby(
+        ["objective", "acquisition", "error_model", "jitter_std", "jitter_iteration", "oracle_model"]
     ):
         plt.figure(figsize=(8, 4))
         sns.lineplot(data=data, x="iteration", y="objective_true", label="Objective (true)")
         sns.lineplot(data=data, x="iteration", y="objective_observed", label="Objective (observed)")
         plt.title(
             "Objective trajectory "
-            f"({acq}, {error_model}, {oracle_model}, jitter={jitter_iteration}, std={jitter_std})"
+            f"({objective}, {acq}, {error_model}, {oracle_model}, jitter={jitter_iteration}, std={jitter_std})"
         )
         plt.xlabel("Iteration")
         plt.ylabel("Objective")
         plt.tight_layout()
         filename = (
             "objective_trajectory_"
-            f"{acq}_{error_model}_{oracle_model}_jit{jitter_iteration}_std{jitter_std}.png"
+            f"{objective}_{acq}_{error_model}_{oracle_model}_jit{jitter_iteration}_std{jitter_std}.png"
         )
         plt.savefig(output_dir / filename, dpi=200)
         plt.close()
@@ -829,8 +842,8 @@ def plot_adjustments(input_dir: Path, output_dir: Path) -> None:
     if not summary_stats.exists():
         return
     stats = pd.read_csv(summary_stats)
-    for (error_model, jitter_iteration), data in stats.groupby(
-        ["error_model", "jitter_iteration"]
+    for (objective, error_model, jitter_iteration), data in stats.groupby(
+        ["objective", "error_model", "jitter_iteration"]
     ):
         plot = sns.catplot(
             data=data,
@@ -843,11 +856,11 @@ def plot_adjustments(input_dir: Path, output_dir: Path) -> None:
             aspect=1.1,
         )
         plot.fig.suptitle(
-            f"Mean parameter adjustment (L2 norm) - {error_model} (jitter={jitter_iteration})"
+            f"Mean parameter adjustment (L2 norm) - {objective} / {error_model} (jitter={jitter_iteration})"
         )
         plot.set_axis_labels("acquisition", "Mean delta L2")
         plot.tight_layout()
-        filename = f"delta_l2_mean_{error_model}_jit{jitter_iteration}.png"
+        filename = f"delta_l2_mean_{objective}_{error_model}_jit{jitter_iteration}.png"
         plot.savefig(output_dir / filename, dpi=200)
         plt.close(plot.fig)
 
@@ -858,7 +871,7 @@ def plot_excess_adjustments(input_dir: Path, output_dir: Path) -> None:
         return
     excess = pd.read_csv(excess_path)
     summary = (
-        excess.groupby(["acquisition", "error_model", "jitter_iteration", "jitter_std"])
+        excess.groupby(["objective", "acquisition", "error_model", "jitter_iteration", "jitter_std"])
         .agg(
             delta_excess_l2_mean=("delta_excess_l2_norm", "mean"),
             delta_excess_l2_std=("delta_excess_l2_norm", "std"),
@@ -866,8 +879,8 @@ def plot_excess_adjustments(input_dir: Path, output_dir: Path) -> None:
         )
         .reset_index()
     )
-    for (jitter_iteration, jitter_std), data in summary.groupby(
-        ["jitter_iteration", "jitter_std"]
+    for (objective, jitter_iteration, jitter_std), data in summary.groupby(
+        ["objective", "jitter_iteration", "jitter_std"]
     ):
         plt.figure(figsize=(8, 4))
         sns.barplot(
@@ -878,12 +891,12 @@ def plot_excess_adjustments(input_dir: Path, output_dir: Path) -> None:
         )
         plt.title(
             "Mean excess adjustment (L2 norm) "
-            f"- jitter={jitter_iteration}, std={jitter_std:.2f}"
+            f"- {objective} jitter={jitter_iteration}, std={jitter_std:.2f}"
         )
         plt.ylabel("Mean delta excess L2")
         plt.tight_layout()
         plt.savefig(
-            output_dir / f"delta_excess_l2_mean_jit{jitter_iteration}_std{jitter_std}.png",
+            output_dir / f"delta_excess_l2_mean_{objective}_jit{jitter_iteration}_std{jitter_std}.png",
             dpi=200,
         )
         plt.close()
