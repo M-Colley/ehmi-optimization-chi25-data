@@ -1,7 +1,0 @@
-acquisition,baseline,error_model,delta_l2_mean,delta_l2_std,runs
-ei,False,gaussian,0.29768164611252296,,1
-ei,True,none,0.29768164611252296,,1
-pi,False,gaussian,0.3851256741307972,,1
-pi,True,none,0.3851256741307972,,1
-ucb,False,gaussian,0.5422151922464079,,1
-ucb,True,none,0.5422151922464079,,1
