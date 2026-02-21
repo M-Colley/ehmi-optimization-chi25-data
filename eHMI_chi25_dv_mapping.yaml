@@ -1,0 +1,298 @@
+version: "1.0"
+updated: "2026-02-21"
+source_dataset: "ehmi-optimization-chi25-data"
+
+# Mapping file tailored for this repository and compatible with the
+# dv-standardization-tool schema format (v2.1+ style with `dvs` entries).
+#
+# Notes:
+# - Aliases are the exact raw column names found in this repo.
+# - IDs are canonicalized names for standardized export.
+
+
+dvs:
+  - id: trust_rating
+    label: "Trust in eHMI"
+    cluster: ux_satisfaction
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: [Trust, Trust1, Trust2]
+
+  - id: understanding_rating
+    label: "Understanding / Comprehension"
+    cluster: cognitive_load
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: [Understanding, Understanding1, Understanding2, Understanding3, Understanding4]
+
+  - id: mental_effort
+    label: "Mental Effort"
+    cluster: cognitive_load
+    measurement:
+      category: Likert
+      primary_unit: "21-point (0-20)"
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: lower_is_better
+    aliases: [MentalLoad]
+
+  - id: perceived_safety
+    label: "Perceived Safety"
+    cluster: affective_emotion
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: [PerceivedSafety, PerceivedSafety1, PerceivedSafety2, PerceivedSafety3, PerceivedSafety4]
+
+  - id: aesthetics_rating
+    label: "Aesthetic Evaluation"
+    cluster: ux_satisfaction
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: [Aesthetics, Aesthetics1]
+
+  - id: acceptance_rating
+    label: "Acceptance"
+    cluster: ux_satisfaction
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: [Acceptance, Acceptance1, Acceptance2]
+
+  - id: crossing_latency
+    label: "Crossing Latency"
+    cluster: performance
+    measurement:
+      category: Time
+      primary_unit: seconds
+      allowed_units: [s, ms]
+      scale_type: ratio
+      direction: lower_is_better
+    aliases: [TimeToStartCrossing, TimeToCross]
+
+  - id: optimization_execution_time
+    label: "Optimization Execution Time"
+    cluster: performance
+    measurement:
+      category: Time
+      primary_unit: seconds
+      allowed_units: [s, ms]
+      scale_type: ratio
+      direction: lower_is_better
+    aliases: [Execution_Time]
+
+  - id: optimization_hypervolume
+    label: "Hypervolume"
+    cluster: performance
+    measurement:
+      category: Continuous
+      primary_unit: score
+      allowed_units: [score]
+      scale_type: ratio
+      direction: higher_is_better
+    aliases: [Hypervolume]
+
+  - id: ehmi_vertical_position
+    label: "eHMI Vertical Position"
+    cluster: behavioral_interaction
+    measurement:
+      category: Continuous
+      primary_unit: normalized_ratio
+      allowed_units: [ratio]
+      scale_type: ratio
+      direction: neutral
+    aliases: [verticalPosition]
+
+  - id: ehmi_vertical_width
+    label: "eHMI Vertical Width"
+    cluster: behavioral_interaction
+    measurement:
+      category: Continuous
+      primary_unit: normalized_ratio
+      allowed_units: [ratio]
+      scale_type: ratio
+      direction: neutral
+    aliases: [verticalWidth]
+
+  - id: ehmi_horizontal_width
+    label: "eHMI Horizontal Width"
+    cluster: behavioral_interaction
+    measurement:
+      category: Continuous
+      primary_unit: normalized_ratio
+      allowed_units: [ratio]
+      scale_type: ratio
+      direction: neutral
+    aliases: [horizontalWidth]
+
+  - id: ehmi_color_red
+    label: "eHMI Color Red Channel"
+    cluster: behavioral_interaction
+    measurement:
+      category: Continuous
+      primary_unit: normalized_ratio
+      allowed_units: [ratio]
+      scale_type: ratio
+      direction: neutral
+    aliases: [r]
+
+  - id: ehmi_color_green
+    label: "eHMI Color Green Channel"
+    cluster: behavioral_interaction
+    measurement:
+      category: Continuous
+      primary_unit: normalized_ratio
+      allowed_units: [ratio]
+      scale_type: ratio
+      direction: neutral
+    aliases: [g]
+
+  - id: ehmi_color_blue
+    label: "eHMI Color Blue Channel"
+    cluster: behavioral_interaction
+    measurement:
+      category: Continuous
+      primary_unit: normalized_ratio
+      allowed_units: [ratio]
+      scale_type: ratio
+      direction: neutral
+    aliases: [b]
+
+  - id: ehmi_opacity
+    label: "eHMI Opacity (Alpha)"
+    cluster: behavioral_interaction
+    measurement:
+      category: Continuous
+      primary_unit: normalized_ratio
+      allowed_units: [ratio]
+      scale_type: ratio
+      direction: neutral
+    aliases: [a]
+
+  - id: ehmi_blink_frequency
+    label: "eHMI Blink Frequency"
+    cluster: behavioral_interaction
+    measurement:
+      category: Continuous
+      primary_unit: normalized_ratio
+      allowed_units: [ratio]
+      scale_type: ratio
+      direction: neutral
+    aliases: [blinkFrequency]
+
+  - id: ehmi_audio_volume
+    label: "eHMI Audio Volume"
+    cluster: behavioral_interaction
+    measurement:
+      category: Continuous
+      primary_unit: normalized_ratio
+      allowed_units: [ratio]
+      scale_type: ratio
+      direction: neutral
+    aliases: [volume]
+
+  - id: user_experience_self_rating
+    label: "Self-reported User Experience"
+    cluster: ux_satisfaction
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: ["add[UserExp]"]
+
+  - id: satisfaction_self_rating
+    label: "Self-reported Satisfaction"
+    cluster: ux_satisfaction
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: ["add[Satisfaction]"]
+
+  - id: confidence_self_rating
+    label: "Self-reported Confidence"
+    cluster: affective_emotion
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: ["add[Confidence]"]
+
+  - id: agency_self_rating
+    label: "Self-reported Agency"
+    cluster: affective_emotion
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: ["add[Agency]"]
+
+  - id: ownership_self_rating
+    label: "Self-reported Ownership"
+    cluster: affective_emotion
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: ["add[Ownership]"]
+
+  - id: perceived_interest
+    label: "Perceived Interest"
+    cluster: affective_emotion
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: ["interest[interest]"]
+
+  - id: perceived_ease
+    label: "Perceived Ease"
+    cluster: ux_satisfaction
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: ["interest[ease]"]
+
+  - id: perceived_realism
+    label: "Perceived Realism"
+    cluster: affective_emotion
+    measurement:
+      category: Likert
+      primary_unit: score
+      allowed_units: [Likert, score]
+      scale_type: ordinal
+      direction: higher_is_better
+    aliases: ["interest[reality]"]
