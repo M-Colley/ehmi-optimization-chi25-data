@@ -11,72 +11,6 @@ source_dataset: "ehmi-optimization-chi25-data"
 
 
 dvs:
-  - id: trust_rating
-    label: "Trust in eHMI"
-    cluster: ux_satisfaction
-    measurement:
-      category: Likert
-      primary_unit: score
-      allowed_units: [Likert, score]
-      scale_type: ordinal
-      direction: higher_is_better
-    aliases: [Trust, Trust1, Trust2]
-
-  - id: understanding_rating
-    label: "Understanding / Comprehension"
-    cluster: cognitive_load
-    measurement:
-      category: Likert
-      primary_unit: score
-      allowed_units: [Likert, score]
-      scale_type: ordinal
-      direction: higher_is_better
-    aliases: [Understanding, Understanding1, Understanding2, Understanding3, Understanding4]
-
-  - id: mental_effort
-    label: "Mental Effort"
-    cluster: cognitive_load
-    measurement:
-      category: Likert
-      primary_unit: "21-point (0-20)"
-      allowed_units: [Likert, score]
-      scale_type: ordinal
-      direction: lower_is_better
-    aliases: [MentalLoad]
-
-  - id: perceived_safety
-    label: "Perceived Safety"
-    cluster: affective_emotion
-    measurement:
-      category: Likert
-      primary_unit: score
-      allowed_units: [Likert, score]
-      scale_type: ordinal
-      direction: higher_is_better
-    aliases: [PerceivedSafety, PerceivedSafety1, PerceivedSafety2, PerceivedSafety3, PerceivedSafety4]
-
-  - id: aesthetics_rating
-    label: "Aesthetic Evaluation"
-    cluster: ux_satisfaction
-    measurement:
-      category: Likert
-      primary_unit: score
-      allowed_units: [Likert, score]
-      scale_type: ordinal
-      direction: higher_is_better
-    aliases: [Aesthetics, Aesthetics1]
-
-  - id: acceptance_rating
-    label: "Acceptance"
-    cluster: ux_satisfaction
-    measurement:
-      category: Likert
-      primary_unit: score
-      allowed_units: [Likert, score]
-      scale_type: ordinal
-      direction: higher_is_better
-    aliases: [Acceptance, Acceptance1, Acceptance2]
-
   - id: crossing_latency
     label: "Crossing Latency"
     cluster: performance
@@ -87,28 +21,6 @@ dvs:
       scale_type: ratio
       direction: lower_is_better
     aliases: [TimeToStartCrossing, TimeToCross]
-
-  - id: optimization_execution_time
-    label: "Optimization Execution Time"
-    cluster: performance
-    measurement:
-      category: Time
-      primary_unit: seconds
-      allowed_units: [s, ms]
-      scale_type: ratio
-      direction: lower_is_better
-    aliases: [Execution_Time]
-
-  - id: optimization_hypervolume
-    label: "Hypervolume"
-    cluster: performance
-    measurement:
-      category: Continuous
-      primary_unit: score
-      allowed_units: [score]
-      scale_type: ratio
-      direction: higher_is_better
-    aliases: [Hypervolume]
 
   - id: ehmi_vertical_position
     label: "eHMI Vertical Position"
